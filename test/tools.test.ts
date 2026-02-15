@@ -9,6 +9,7 @@ import { handleConnect } from "../src/tools/connect.js";
 import { handleQuery } from "../src/tools/query.js";
 import { handleRestructure } from "../src/tools/restructure.js";
 import { handleHistory } from "../src/tools/history.js";
+import { handleOnboard } from "../src/tools/onboard.js";
 import { ValidationError, EngineError } from "../src/validate.js";
 
 const AGENT = "test-agent";
@@ -121,6 +122,53 @@ describe("graph_next", () => {
     expect(result.nodes[0].ancestors).toHaveLength(1);
     expect(result.nodes[0].ancestors[0].summary).toBe("Root goal");
     expect(result.nodes[0].context_links.self).toEqual(["src/foo.ts"]);
+  });
+
+  it("scopes results to a subtree", () => {
+    const { root } = handleOpen({ project: "test" }, AGENT) as any;
+
+    const plan = handlePlan(
+      {
+        nodes: [
+          { ref: "p1", parent_ref: root.id, summary: "Phase 1", properties: { priority: 10 } },
+          { ref: "t1", parent_ref: "p1", summary: "Task in P1", properties: { priority: 5 } },
+          { ref: "p2", parent_ref: root.id, summary: "Phase 2", properties: { priority: 10 } },
+          { ref: "t2", parent_ref: "p2", summary: "Task in P2", properties: { priority: 5 } },
+        ],
+      },
+      AGENT
+    );
+
+    const p1Id = plan.created.find((c) => c.ref === "p1")!.id;
+
+    // Without scope: returns highest priority actionable (could be from either phase)
+    const all = handleNext({ project: "test", count: 10 }, AGENT);
+    expect(all.nodes.length).toBeGreaterThanOrEqual(2);
+
+    // With scope: only returns tasks under Phase 1
+    const scoped = handleNext({ project: "test", scope: p1Id }, AGENT);
+    expect(scoped.nodes).toHaveLength(1);
+    expect(scoped.nodes[0].node.summary).toBe("Task in P1");
+  });
+
+  it("returns empty when scope has no actionable descendants", () => {
+    const { root } = handleOpen({ project: "test" }, AGENT) as any;
+
+    const plan = handlePlan(
+      {
+        nodes: [
+          { ref: "p1", parent_ref: root.id, summary: "Phase 1" },
+          { ref: "t1", parent_ref: "p1", summary: "Task", depends_on: ["p1"] },
+        ],
+      },
+      AGENT
+    );
+
+    // t1 depends on p1 which is unresolved — nothing actionable under p1
+    // actually p1 has an unresolved child, so it's not a leaf. t1 is blocked.
+    const p1Id = plan.created.find((c) => c.ref === "p1")!.id;
+    const scoped = handleNext({ project: "test", scope: p1Id }, AGENT);
+    expect(scoped.nodes).toHaveLength(0);
   });
 
   it("soft-claims when requested", () => {
@@ -368,6 +416,103 @@ describe("graph_history", () => {
     const actions = result.events.map((e) => e.action);
     expect(actions).toContain("created");
     expect(actions).toContain("updated");
+  });
+});
+
+describe("graph_onboard", () => {
+  it("returns all five sections for a project", () => {
+    const { root } = handleOpen({ project: "test", goal: "Build app" }, AGENT) as any;
+
+    // Create a tree with some resolved work and evidence
+    const plan = handlePlan(
+      {
+        nodes: [
+          { ref: "phase1", parent_ref: root.id, summary: "Phase 1", context_links: ["src/db.ts"] },
+          { ref: "task1", parent_ref: "phase1", summary: "Setup DB", properties: { priority: 10 } },
+          { ref: "task2", parent_ref: "phase1", summary: "Add migrations", depends_on: ["task1"], properties: { priority: 5 } },
+          { ref: "phase2", parent_ref: root.id, summary: "Phase 2" },
+          { ref: "task3", parent_ref: "phase2", summary: "Build API", context_links: ["src/api.ts"] },
+        ],
+      },
+      AGENT
+    );
+
+    // Resolve task1 with evidence
+    const task1Id = plan.created.find((c) => c.ref === "task1")!.id;
+    handleUpdate(
+      {
+        updates: [
+          {
+            node_id: task1Id,
+            resolved: true,
+            add_evidence: [
+              { type: "note", ref: "Created SQLite schema with WAL mode" },
+              { type: "git", ref: "abc123 — initial schema" },
+            ],
+          },
+        ],
+      },
+      AGENT
+    );
+
+    const result = handleOnboard({ project: "test" });
+
+    // 1. Summary
+    expect(result.summary.total).toBe(6); // root + 2 phases + 3 tasks
+    expect(result.summary.resolved).toBe(1);
+    expect(result.summary.actionable).toBe(2); // task2 (unblocked), task3
+
+    // 2. Tree — should show root's direct children with their children
+    expect(result.tree).toHaveLength(2);
+    expect(result.tree[0].summary).toBe("Phase 1");
+    expect(result.tree[0].children).toHaveLength(2);
+    expect(result.tree[1].summary).toBe("Phase 2");
+
+    // 3. Recent evidence — should include evidence from resolved task1
+    expect(result.recent_evidence.length).toBeGreaterThanOrEqual(2);
+    expect(result.recent_evidence.some((e) => e.type === "git")).toBe(true);
+    expect(result.recent_evidence.some((e) => e.type === "note")).toBe(true);
+    expect(result.recent_evidence[0].node_summary).toBe("Setup DB");
+
+    // 4. Context links — aggregated and deduplicated
+    expect(result.context_links).toContain("src/db.ts");
+    expect(result.context_links).toContain("src/api.ts");
+
+    // 5. Actionable
+    expect(result.actionable.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("throws for nonexistent project", () => {
+    expect(() => handleOnboard({ project: "nope" })).toThrow(EngineError);
+  });
+
+  it("respects evidence_limit", () => {
+    const { root } = handleOpen({ project: "test", goal: "Goal" }, AGENT) as any;
+    const plan = handlePlan(
+      { nodes: [{ ref: "a", parent_ref: root.id, summary: "A" }] },
+      AGENT
+    );
+
+    const nodeId = plan.created[0].id;
+    handleUpdate(
+      {
+        updates: [
+          {
+            node_id: nodeId,
+            resolved: true,
+            add_evidence: [
+              { type: "note", ref: "ev1" },
+              { type: "note", ref: "ev2" },
+              { type: "note", ref: "ev3" },
+            ],
+          },
+        ],
+      },
+      AGENT
+    );
+
+    const result = handleOnboard({ project: "test", evidence_limit: 2 });
+    expect(result.recent_evidence).toHaveLength(2);
   });
 });
 

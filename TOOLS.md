@@ -121,6 +121,7 @@ Get the next actionable node. Server-side ranking.
 ```typescript
 input: {
   project: string,
+  scope?: string,                 // node ID — only return actionable descendants of this node
   filter?: Record<string, any>,   // match against node properties
   count?: number,                 // return top N, default 1
   claim?: boolean,                // if true, mark returned node(s) with agent identity
@@ -404,16 +405,19 @@ claim_ttl_minutes: 60               # soft claim expiry
 
 ## Token Budget Estimates
 
-| Operation | Typical request | Typical response |
-|---|---|---|
-| graph_open (with project) | ~30 tokens | ~60 tokens |
-| graph_plan (10 nodes) | ~300 tokens | ~80 tokens |
-| graph_next | ~30 tokens | ~200 tokens |
-| graph_context | ~20 tokens | ~300 tokens (depth 2) |
-| graph_update (1 node) | ~80 tokens | ~40 tokens |
-| graph_connect (1 edge) | ~40 tokens | ~20 tokens |
-| graph_query | ~60 tokens | ~200 tokens (20 results) |
-| graph_restructure (1 op) | ~50 tokens | ~40 tokens |
-| graph_history | ~20 tokens | ~200 tokens |
+Measured against real Claude Code sessions (swimlanes-v0, 30 nodes). Estimate = ~chars/4.
 
-Full claim-work-resolve cycle: ~3 calls, ~500 tokens total. Compare to Linear MCP: ~6 calls, ~5000+ tokens.
+| Operation | Typical request | Typical response | Notes |
+|---|---|---|---|
+| graph_open (with project) | ~30 tokens | ~100 tokens | Includes full root node |
+| graph_plan (4 nodes) | ~160 tokens | ~55 tokens | Scales ~40 tokens/node |
+| graph_next | ~30 tokens | ~200-300 tokens | Higher with rich evidence on resolved deps |
+| graph_context | ~20 tokens | ~220 tokens (depth 2) | Varies with subtree size |
+| graph_update (1 node) | ~80 tokens | ~40 tokens | |
+| graph_connect (1 edge) | ~40 tokens | ~20 tokens | |
+| graph_query (3 results) | ~60 tokens | ~130 tokens | Scales ~45 tokens/node |
+| graph_restructure (1 op) | ~50 tokens | ~40 tokens | |
+| graph_history | ~20 tokens | ~200 tokens | |
+| graph_onboard | ~20 tokens | ~400-600 tokens | Single-call orientation for new agents |
+
+Full claim-work-resolve cycle: ~3 calls, ~450 tokens total. Compare to Linear MCP: ~6 calls, ~5000+ tokens.

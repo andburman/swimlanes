@@ -15,6 +15,7 @@ import { handleQuery } from "./tools/query.js";
 import { handleNext } from "./tools/next.js";
 import { handleRestructure } from "./tools/restructure.js";
 import { handleHistory } from "./tools/history.js";
+import { handleOnboard } from "./tools/onboard.js";
 
 // Config from env
 const AGENT_IDENTITY = process.env.GRAPH_AGENT ?? "default-agent";
@@ -95,6 +96,10 @@ const TOOLS = [
       type: "object" as const,
       properties: {
         project: { type: "string", description: "Project name (e.g. 'my-project'), not a node ID" },
+        scope: {
+          type: "string",
+          description: "Node ID to scope results to. Only returns actionable descendants of this node.",
+        },
         filter: {
           type: "object",
           description: "Match against node properties",
@@ -292,6 +297,22 @@ const TOOLS = [
       required: ["node_id"],
     },
   },
+  {
+    name: "graph_onboard",
+    description:
+      "Single-call orientation for new agents joining a project. Returns project summary, tree structure (depth 2), recent evidence from resolved nodes (knowledge transfer), all context links, and actionable tasks. Use this as your first call when starting work on an existing project.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project: { type: "string", description: "Project name (e.g. 'my-project')" },
+        evidence_limit: {
+          type: "number",
+          description: "Max evidence entries to return (default 20, max 50)",
+        },
+      },
+      required: ["project"],
+    },
+  },
 ];
 
 export async function startServer(): Promise<void> {
@@ -350,6 +371,10 @@ export async function startServer(): Promise<void> {
 
         case "graph_history":
           result = handleHistory(args as any);
+          break;
+
+        case "graph_onboard":
+          result = handleOnboard(args as any);
           break;
 
         default:

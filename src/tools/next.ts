@@ -1,11 +1,12 @@
 import { getDb } from "../db.js";
 import { getNode, getAncestors, updateNode } from "../nodes.js";
 import { getEdgesFrom } from "../edges.js";
-import { requireString, optionalNumber, optionalBoolean } from "../validate.js";
+import { requireString, optionalString, optionalNumber, optionalBoolean } from "../validate.js";
 import type { Node, NodeRow, Evidence } from "../types.js";
 
 export interface NextInput {
   project: string;
+  scope?: string;
   filter?: Record<string, unknown>;
   count?: number;
   claim?: boolean;
@@ -35,14 +36,38 @@ export function handleNext(
   claimTtlMinutes: number = 60
 ): NextResult {
   const project = requireString(input?.project, "project");
+  const scope = optionalString(input?.scope, "scope");
   const count = optionalNumber(input?.count, "count", 1, 50) ?? 1;
   const claim = optionalBoolean(input?.claim, "claim") ?? false;
   const db = getDb();
+
+  // [sl:HB5daFH1HlFXzuTluibnk] Scope filtering: restrict to descendants of a given node
+  let scopeFilter = "";
+  const scopeParams: unknown[] = [];
+  if (scope) {
+    const descendantIds = db
+      .prepare(
+        `WITH RECURSIVE descendants(id) AS (
+          SELECT id FROM nodes WHERE parent = ?
+          UNION ALL
+          SELECT n.id FROM nodes n JOIN descendants d ON n.parent = d.id
+        )
+        SELECT id FROM descendants`
+      )
+      .all(scope) as Array<{ id: string }>;
+
+    if (descendantIds.length === 0) {
+      return { nodes: [] };
+    }
+    scopeFilter = `AND n.id IN (${descendantIds.map(() => "?").join(",")})`;
+    scopeParams.push(...descendantIds.map((d) => d.id));
+  }
 
   // Find actionable nodes: unresolved, leaf (no unresolved children), all deps resolved
   let query = `
     SELECT n.* FROM nodes n
     WHERE n.project = ? AND n.resolved = 0
+    ${scopeFilter}
     AND NOT EXISTS (
       SELECT 1 FROM nodes child WHERE child.parent = n.id AND child.resolved = 0
     )
@@ -53,7 +78,7 @@ export function handleNext(
     )
   `;
 
-  const params: unknown[] = [project];
+  const params: unknown[] = [project, ...scopeParams];
 
   // Skip nodes claimed by other agents (if claim TTL hasn't expired)
   const claimCutoff = new Date(

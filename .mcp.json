@@ -1,11 +1,11 @@
 {
   "mcpServers": {
-    "swimlanes": {
+    "graph": {
       "command": "node",
       "args": ["/Users/burman/repos/swimlanes/dist/index.js"],
       "env": {
-        "SWIMLANES_AGENT": "claude-code",
-        "SWIMLANES_DB": "/Users/burman/repos/swimlanes/swimlanes.db"
+        "GRAPH_AGENT": "claude-code",
+        "GRAPH_DB": "/Users/burman/repos/swimlanes/graph.db"
       }
     }
   }

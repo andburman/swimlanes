@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { randomUUID } from "crypto";
 
 const server = spawn("node", ["dist/index.js"], {
-  env: { ...process.env, SWIMLANES_AGENT: "claude-code", SWIMLANES_DB: "./swimlanes.db" },
+  env: { ...process.env, GRAPH_AGENT: "claude-code", GRAPH_DB: "./graph.db" },
   stdio: ["pipe", "pipe", "pipe"],
 });
 
@@ -62,15 +62,15 @@ const evidence = {
   "9GuZjHuQy-tFbP2f4qlCM": { // npx support
     evidence: [
       { type: "git", ref: "42058b6 — Verified shebang in index.ts, bin field in package.json, files field for dist/" },
-      { type: "note", ref: "package.json has bin.swimlanes pointing to dist/index.js. tsup config adds shebang banner." },
+      { type: "note", ref: "package.json has bin.graph pointing to dist/index.js. tsup config adds shebang banner." },
     ],
     context_links: ["package.json", "tsup.config.ts"],
   },
   "LUdt8odUZODsxAy6f2fve": { // README
     evidence: [
       { type: "git", ref: "42058b6 — Initial README with install, configure, tool reference" },
-      { type: "git", ref: "cc9d753 — Added token efficiency metrics table comparing swimlanes vs traditional tracker" },
-      { type: "git", ref: "429124b — Fixed GitHub URL to github.com/andburman/swimlanes" },
+      { type: "git", ref: "cc9d753 — Added token efficiency metrics table comparing graph vs traditional tracker" },
+      { type: "git", ref: "429124b — Fixed GitHub URL to github.com/andburman/graph" },
       { type: "note", ref: "README includes: what/why, install, MCP config example, 9 tool descriptions, token efficiency comparison, design principles" },
     ],
     context_links: ["README.md"],
@@ -113,12 +113,12 @@ const evidence = {
   "VQ5-b4DeHbLuoo_6HnkaE": { // git init
     evidence: [
       { type: "git", ref: "e7951dd — Initial commit with full project structure" },
-      { type: "note", ref: "Pushed to github.com/andburman/swimlanes. Main branch, 7 commits." },
+      { type: "note", ref: "Pushed to github.com/andburman/graph. Main branch, 7 commits." },
     ],
   },
   "nL8MOgkhBf5QTtV7dtspY": { // oss prep parent
     evidence: [
-      { type: "note", ref: "All children resolved: LICENSE, git init. Repo live at github.com/andburman/swimlanes" },
+      { type: "note", ref: "All children resolved: LICENSE, git init. Repo live at github.com/andburman/graph" },
     ],
   },
 
@@ -126,7 +126,7 @@ const evidence = {
   "K5ejNLlqv7g-7e6vxG61t": { // dogfood parent
     evidence: [
       { type: "git", ref: "46d7716 — Created dogfood.mjs and sl.mjs CLI helpers" },
-      { type: "note", ref: "swimlanes-v0 project tracks its own development. 23 nodes created, dependencies managed, mid-flight replanning validated (added perf tasks after initial plan)." },
+      { type: "note", ref: "graph-v0 project tracks its own development. 23 nodes created, dependencies managed, mid-flight replanning validated (added perf tasks after initial plan)." },
     ],
     context_links: ["dogfood.mjs", "sl.mjs"],
   },
@@ -164,7 +164,7 @@ const evidence = {
     evidence: [
       { type: "git", ref: "abd9721 — All 4 perf optimizations in one commit" },
       { type: "git", ref: "70e4682 — Scale tests validate sub-3ms at 1000 nodes" },
-      { type: "note", ref: "swimlanes_next at 1000 nodes: 2.6ms. Full claim→resolve cycle: 2.3ms. All 4 children resolved." },
+      { type: "note", ref: "graph_next at 1000 nodes: 2.6ms. Full claim→resolve cycle: 2.3ms. All 4 children resolved." },
     ],
   },
 };
@@ -175,7 +175,7 @@ for (const [nodeId, data] of Object.entries(evidence)) {
   if (data.evidence) update.add_evidence = data.evidence;
   if (data.context_links) update.add_context_links = data.context_links;
 
-  const result = await call("swimlanes_update", { updates: [update] });
+  const result = await call("graph_update", { updates: [update] });
   console.log(`Updated ${nodeId} (rev ${result.updated[0].rev}): +${data.evidence?.length ?? 0} evidence, +${data.context_links?.length ?? 0} links`);
   updated++;
 }

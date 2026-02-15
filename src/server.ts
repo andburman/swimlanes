@@ -17,14 +17,14 @@ import { handleRestructure } from "./tools/restructure.js";
 import { handleHistory } from "./tools/history.js";
 
 // Config from env
-const AGENT_IDENTITY = process.env.SWIMLANES_AGENT ?? "default-agent";
-const DB_PATH = process.env.SWIMLANES_DB ?? "./swimlanes.db";
-const CLAIM_TTL = parseInt(process.env.SWIMLANES_CLAIM_TTL ?? "60", 10);
+const AGENT_IDENTITY = process.env.GRAPH_AGENT ?? "default-agent";
+const DB_PATH = process.env.GRAPH_DB ?? "./graph.db";
+const CLAIM_TTL = parseInt(process.env.GRAPH_CLAIM_TTL ?? "60", 10);
 
 // Tool definitions
 const TOOLS = [
   {
-    name: "swimlanes_open",
+    name: "graph_open",
     description:
       "Open an existing project or create a new one. Omit 'project' to list all projects. Returns project root node and summary stats (total, resolved, unresolved, blocked, actionable counts).",
     inputSchema: {
@@ -42,7 +42,7 @@ const TOOLS = [
     },
   },
   {
-    name: "swimlanes_plan",
+    name: "graph_plan",
     description:
       "Batch create nodes with parent-child and dependency relationships in one atomic call. Use for decomposing work into subtrees. Each node needs a temp 'ref' for intra-batch references. parent_ref and depends_on can reference batch refs or existing node IDs.",
     inputSchema: {
@@ -88,7 +88,7 @@ const TOOLS = [
     },
   },
   {
-    name: "swimlanes_next",
+    name: "graph_next",
     description:
       "Get the next actionable node — an unresolved leaf with all dependencies resolved. Ranked by priority (from properties), depth, and least-recently-updated. Returns the node with ancestor chain, context links, and resolved dependency info. Use claim=true to soft-lock the node. When modifying code for this task, annotate key changes with // [sl:nodeId] so future agents can trace code back to this task.",
     inputSchema: {
@@ -113,7 +113,7 @@ const TOOLS = [
     },
   },
   {
-    name: "swimlanes_context",
+    name: "graph_context",
     description:
       "Deep-read a node and its neighborhood: ancestors (scope chain), children tree (to configurable depth), dependency graph (what it depends on, what depends on it). Look for // [sl:nodeId] annotations in source files to find code tied to specific tasks.",
     inputSchema: {
@@ -129,7 +129,7 @@ const TOOLS = [
     },
   },
   {
-    name: "swimlanes_update",
+    name: "graph_update",
     description:
       "Update one or more nodes. Can change resolved, state, summary, properties (merged), context_links, and add evidence. When resolving nodes, returns newly_actionable — nodes that became unblocked. ENFORCED: Resolving a node requires evidence — the engine rejects resolved=true if the node has no existing evidence and no add_evidence in the call. Include at least one add_evidence entry (type: 'git' for commits, 'note' for what was done and why, 'test' for results). Also add context_links to files you modified.",
     inputSchema: {
@@ -179,9 +179,9 @@ const TOOLS = [
     },
   },
   {
-    name: "swimlanes_connect",
+    name: "graph_connect",
     description:
-      "Add or remove edges between nodes. Types: 'depends_on' (with cycle detection), 'relates_to', or custom. Parent edges not allowed — use swimlanes_restructure for reparenting.",
+      "Add or remove edges between nodes. Types: 'depends_on' (with cycle detection), 'relates_to', or custom. Parent edges not allowed — use graph_restructure for reparenting.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -209,7 +209,7 @@ const TOOLS = [
     },
   },
   {
-    name: "swimlanes_query",
+    name: "graph_query",
     description:
       "Search and filter nodes. Filters: resolved, properties, text, ancestor (descendants of), is_leaf, is_actionable, is_blocked, claimed_by. Supports sorting and cursor pagination.",
     inputSchema: {
@@ -247,7 +247,7 @@ const TOOLS = [
     },
   },
   {
-    name: "swimlanes_restructure",
+    name: "graph_restructure",
     description:
       "Modify graph structure: move (reparent), merge (combine two nodes), drop (resolve node + subtree with reason). Atomic. Reports newly_actionable nodes.",
     inputSchema: {
@@ -279,7 +279,7 @@ const TOOLS = [
     },
   },
   {
-    name: "swimlanes_history",
+    name: "graph_history",
     description:
       "Read the audit trail for a node. Shows who changed what, when, and why. Useful for understanding past decisions across sessions.",
     inputSchema: {
@@ -299,7 +299,7 @@ export async function startServer(): Promise<void> {
   initDb(DB_PATH);
 
   const server = new Server(
-    { name: "swimlanes", version: "0.1.0" },
+    { name: "graph", version: "0.1.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -316,39 +316,39 @@ export async function startServer(): Promise<void> {
       let result: unknown;
 
       switch (name) {
-        case "swimlanes_open":
+        case "graph_open":
           result = handleOpen(args as any, AGENT_IDENTITY);
           break;
 
-        case "swimlanes_plan":
+        case "graph_plan":
           result = handlePlan(args as any, AGENT_IDENTITY);
           break;
 
-        case "swimlanes_next":
+        case "graph_next":
           result = handleNext(args as any, AGENT_IDENTITY, CLAIM_TTL);
           break;
 
-        case "swimlanes_context":
+        case "graph_context":
           result = handleContext(args as any);
           break;
 
-        case "swimlanes_update":
+        case "graph_update":
           result = handleUpdate(args as any, AGENT_IDENTITY);
           break;
 
-        case "swimlanes_connect":
+        case "graph_connect":
           result = handleConnect(args as any, AGENT_IDENTITY);
           break;
 
-        case "swimlanes_query":
+        case "graph_query":
           result = handleQuery(args as any);
           break;
 
-        case "swimlanes_restructure":
+        case "graph_restructure":
           result = handleRestructure(args as any, AGENT_IDENTITY);
           break;
 
-        case "swimlanes_history":
+        case "graph_history":
           result = handleHistory(args as any);
           break;
 

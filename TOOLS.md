@@ -1,4 +1,4 @@
-# Swimlanes — MCP Tool Surface v2
+# Graph — MCP Tool Surface v2
 
 ## Data Model
 
@@ -42,7 +42,7 @@ interface Edge {
 
 ## Tools
 
-### 1. swimlanes_open
+### 1. graph_open
 
 Open an existing project or create a new one. Called with no arguments, returns all projects.
 
@@ -77,11 +77,11 @@ returns: {
 }
 ```
 
-Lean. Counts only. Agent calls `swimlanes_next` for work, `swimlanes_query` to explore.
+Lean. Counts only. Agent calls `graph_next` for work, `graph_query` to explore.
 
 ---
 
-### 2. swimlanes_plan
+### 2. graph_plan
 
 Batch create nodes with relationships. The decomposition operation.
 
@@ -114,7 +114,7 @@ returns: {
 
 ---
 
-### 3. swimlanes_next
+### 3. graph_next
 
 Get the next actionable node. Server-side ranking.
 
@@ -155,11 +155,11 @@ Among actionable nodes, rank by:
 3. Least recently updated (avoid starvation)
 
 **Claim behavior:**
-When `claim: true`, the returned node gets `properties._claimed_by` set to the agent identity and `properties._claimed_at` set to current timestamp. `swimlanes_next` skips nodes claimed by a different agent within a configurable TTL (default 1 hour). Stale claims are ignored. This is soft locking — no fencing tokens, no hard leases. Sufficient for v0.
+When `claim: true`, the returned node gets `properties._claimed_by` set to the agent identity and `properties._claimed_at` set to current timestamp. `graph_next` skips nodes claimed by a different agent within a configurable TTL (default 1 hour). Stale claims are ignored. This is soft locking — no fencing tokens, no hard leases. Sufficient for v0.
 
 ---
 
-### 4. swimlanes_context
+### 4. graph_context
 
 Deep-read a node and its neighborhood.
 
@@ -202,7 +202,7 @@ interface NodeTree {
 
 ---
 
-### 5. swimlanes_update
+### 5. graph_update
 
 Modify one or more nodes.
 
@@ -250,7 +250,7 @@ This is important — the agent learns immediately what work it just unblocked, 
 
 ---
 
-### 6. swimlanes_connect
+### 6. graph_connect
 
 Add or remove edges between nodes.
 
@@ -276,12 +276,12 @@ returns: {
 
 **Rules:**
 - `depends_on` edges get cycle detection. Other types do not.
-- Parent-child relationships are NOT managed here. Use `swimlanes_restructure` for reparenting.
+- Parent-child relationships are NOT managed here. Use `graph_restructure` for reparenting.
 - Adding a `depends_on` edge to an unresolved target immediately makes the source node blocked (if it wasn't already).
 
 ---
 
-### 7. swimlanes_query
+### 7. graph_query
 
 Search and filter nodes.
 
@@ -321,7 +321,7 @@ returns: {
 
 ---
 
-### 8. swimlanes_restructure
+### 8. graph_restructure
 
 Modify graph structure. For replanning.
 
@@ -363,7 +363,7 @@ returns: {
 
 ---
 
-### 9. swimlanes_history
+### 9. graph_history
 
 Read the audit trail for a node.
 
@@ -396,9 +396,9 @@ returns: {
 ## Configuration
 
 ```yaml
-# swimlanes.config.yaml
+# graph.config.yaml
 agent_identity: "claude-code-v1"    # attached to all writes
-db_path: "./swimlanes.db"           # SQLite file location
+db_path: "./graph.db"           # SQLite file location
 claim_ttl_minutes: 60               # soft claim expiry
 ```
 
@@ -406,14 +406,14 @@ claim_ttl_minutes: 60               # soft claim expiry
 
 | Operation | Typical request | Typical response |
 |---|---|---|
-| swimlanes_open (with project) | ~30 tokens | ~60 tokens |
-| swimlanes_plan (10 nodes) | ~300 tokens | ~80 tokens |
-| swimlanes_next | ~30 tokens | ~200 tokens |
-| swimlanes_context | ~20 tokens | ~300 tokens (depth 2) |
-| swimlanes_update (1 node) | ~80 tokens | ~40 tokens |
-| swimlanes_connect (1 edge) | ~40 tokens | ~20 tokens |
-| swimlanes_query | ~60 tokens | ~200 tokens (20 results) |
-| swimlanes_restructure (1 op) | ~50 tokens | ~40 tokens |
-| swimlanes_history | ~20 tokens | ~200 tokens |
+| graph_open (with project) | ~30 tokens | ~60 tokens |
+| graph_plan (10 nodes) | ~300 tokens | ~80 tokens |
+| graph_next | ~30 tokens | ~200 tokens |
+| graph_context | ~20 tokens | ~300 tokens (depth 2) |
+| graph_update (1 node) | ~80 tokens | ~40 tokens |
+| graph_connect (1 edge) | ~40 tokens | ~20 tokens |
+| graph_query | ~60 tokens | ~200 tokens (20 results) |
+| graph_restructure (1 op) | ~50 tokens | ~40 tokens |
+| graph_history | ~20 tokens | ~200 tokens |
 
 Full claim-work-resolve cycle: ~3 calls, ~500 tokens total. Compare to Linear MCP: ~6 calls, ~5000+ tokens.

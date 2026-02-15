@@ -17,7 +17,7 @@ beforeEach(() => {
   initDb(":memory:");
 });
 
-describe("swimlanes_open", () => {
+describe("graph_open", () => {
   it("lists projects when no project specified", () => {
     const result = handleOpen({}, AGENT) as any;
     expect(result.projects).toEqual([]);
@@ -36,7 +36,7 @@ describe("swimlanes_open", () => {
   });
 });
 
-describe("swimlanes_plan", () => {
+describe("graph_plan", () => {
   it("creates nodes with dependencies", () => {
     const { root } = handleOpen({ project: "test", goal: "Root" }, AGENT) as any;
 
@@ -70,7 +70,7 @@ describe("swimlanes_plan", () => {
   });
 });
 
-describe("swimlanes_next", () => {
+describe("graph_next", () => {
   it("returns highest priority actionable node", () => {
     const { root } = handleOpen({ project: "test" }, AGENT) as any;
 
@@ -132,7 +132,7 @@ describe("swimlanes_next", () => {
   });
 });
 
-describe("swimlanes_context", () => {
+describe("graph_context", () => {
   it("returns full neighborhood", () => {
     const { root } = handleOpen({ project: "test" }, AGENT) as any;
 
@@ -156,7 +156,7 @@ describe("swimlanes_context", () => {
   });
 });
 
-describe("swimlanes_update", () => {
+describe("graph_update", () => {
   it("resolves nodes and reports newly actionable", () => {
     const { root } = handleOpen({ project: "test" }, AGENT) as any;
 
@@ -226,7 +226,7 @@ describe("swimlanes_update", () => {
   });
 });
 
-describe("swimlanes_connect", () => {
+describe("graph_connect", () => {
   it("adds and removes edges", () => {
     const { root } = handleOpen({ project: "test" }, AGENT) as any;
     const plan = handlePlan(
@@ -268,7 +268,7 @@ describe("swimlanes_connect", () => {
   });
 });
 
-describe("swimlanes_query", () => {
+describe("graph_query", () => {
   it("filters by text", () => {
     const { root } = handleOpen({ project: "test" }, AGENT) as any;
     handlePlan(
@@ -304,7 +304,7 @@ describe("swimlanes_query", () => {
   });
 });
 
-describe("swimlanes_restructure", () => {
+describe("graph_restructure", () => {
   it("moves a node", () => {
     const { root } = handleOpen({ project: "test" }, AGENT) as any;
     const plan = handlePlan(
@@ -355,7 +355,7 @@ describe("swimlanes_restructure", () => {
   });
 });
 
-describe("swimlanes_history", () => {
+describe("graph_history", () => {
   it("returns audit trail", () => {
     const { root } = handleOpen({ project: "test" }, AGENT) as any;
     handleUpdate(

@@ -2,7 +2,7 @@ import { spawn } from "child_process";
 import { randomUUID } from "crypto";
 
 const server = spawn("node", ["dist/index.js"], {
-  env: { ...process.env, SWIMLANES_AGENT: "claude-code", SWIMLANES_DB: "./swimlanes.db" },
+  env: { ...process.env, GRAPH_AGENT: "claude-code", GRAPH_DB: "./graph.db" },
   stdio: ["pipe", "pipe", "pipe"],
 });
 
@@ -41,13 +41,13 @@ await send("initialize", {
 server.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
 
 // Get existing project
-const project = await call("swimlanes_open", { project: "swimlanes-v0" });
+const project = await call("graph_open", { project: "graph-v0" });
 const rootId = project.root.id;
 console.log("Project root:", rootId);
 console.log("Current status:", JSON.stringify(project.summary));
 
 // Add performance optimization tasks under a new parent
-const plan = await call("swimlanes_plan", {
+const plan = await call("graph_plan", {
   nodes: [
     {
       ref: "perf",
@@ -72,7 +72,7 @@ const plan = await call("swimlanes_plan", {
     {
       ref: "sql-ranking",
       parent_ref: "perf",
-      summary: "Push swimlanes_next ranking into SQL — never load more than N rows",
+      summary: "Push graph_next ranking into SQL — never load more than N rows",
       context_links: ["src/tools/next.ts"],
       depends_on: ["cache-depth"],
       properties: { priority: 8, domain: "backend" },
@@ -93,11 +93,11 @@ for (const c of plan.created) {
 }
 
 // Check updated summary
-const summary = await call("swimlanes_open", { project: "swimlanes-v0" });
+const summary = await call("graph_open", { project: "graph-v0" });
 console.log("\nUpdated project summary:", JSON.stringify(summary.summary, null, 2));
 
 // Check what's now actionable
-const next = await call("swimlanes_next", { project: "swimlanes-v0", count: 10 });
+const next = await call("graph_next", { project: "graph-v0", count: 10 });
 console.log("\nActionable tasks (ranked):");
 for (const n of next.nodes) {
   console.log(`  [P${n.node.properties.priority ?? 0}] ${n.node.summary} (${n.node.id})`);

@@ -34,7 +34,7 @@ export function handleConnect(input: ConnectInput, agent: string): ConnectResult
       rejected.push({
         from: edge.from,
         to: edge.to,
-        reason: "parent_edges_not_allowed: use swimlanes_restructure to reparent",
+        reason: "parent_edges_not_allowed: use graph_restructure to reparent",
       });
       continue;
     }

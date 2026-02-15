@@ -83,29 +83,29 @@ describe("scale: 100 nodes", () => {
     const { ms: buildMs } = time("build 100 nodes", () => buildProject("scale-100", 100));
     expect(buildMs).toBeLessThan(2000);
 
-    const { result: next, ms: nextMs } = time("swimlanes_next (top 5)", () =>
+    const { result: next, ms: nextMs } = time("graph_next (top 5)", () =>
       handleNext({ project: "scale-100", count: 5 }, AGENT)
     );
     expect(next.nodes.length).toBeGreaterThan(0);
     expect(nextMs).toBeLessThan(100);
 
-    const { result: query, ms: queryMs } = time("swimlanes_query (actionable)", () =>
+    const { result: query, ms: queryMs } = time("graph_query (actionable)", () =>
       handleQuery({ project: "scale-100", filter: { is_actionable: true } })
     );
     expect(query.nodes.length).toBeGreaterThan(0);
     expect(queryMs).toBeLessThan(100);
 
-    const { result: blocked, ms: blockedMs } = time("swimlanes_query (blocked)", () =>
+    const { result: blocked, ms: blockedMs } = time("graph_query (blocked)", () =>
       handleQuery({ project: "scale-100", filter: { is_blocked: true } })
     );
     expect(blockedMs).toBeLessThan(100);
 
-    const { result: text, ms: textMs } = time("swimlanes_query (text search)", () =>
+    const { result: text, ms: textMs } = time("graph_query (text search)", () =>
       handleQuery({ project: "scale-100", filter: { text: "auth" } })
     );
     expect(textMs).toBeLessThan(100);
 
-    const { ms: openMs } = time("swimlanes_open (summary)", () =>
+    const { ms: openMs } = time("graph_open (summary)", () =>
       handleOpen({ project: "scale-100" }, AGENT)
     );
     expect(openMs).toBeLessThan(100);
@@ -121,34 +121,34 @@ describe("scale: 500 nodes", () => {
     const { ms: buildMs } = time("build 500 nodes", () => buildProject("scale-500", 500));
     expect(buildMs).toBeLessThan(5000);
 
-    const { result: next, ms: nextMs } = time("swimlanes_next (top 5)", () =>
+    const { result: next, ms: nextMs } = time("graph_next (top 5)", () =>
       handleNext({ project: "scale-500", count: 5 }, AGENT)
     );
     expect(next.nodes.length).toBeGreaterThan(0);
     expect(nextMs).toBeLessThan(200);
 
-    const { result: query, ms: queryMs } = time("swimlanes_query (actionable)", () =>
+    const { result: query, ms: queryMs } = time("graph_query (actionable)", () =>
       handleQuery({ project: "scale-500", filter: { is_actionable: true } })
     );
     expect(query.nodes.length).toBeGreaterThan(0);
     expect(queryMs).toBeLessThan(200);
 
-    const { ms: blockedMs } = time("swimlanes_query (blocked)", () =>
+    const { ms: blockedMs } = time("graph_query (blocked)", () =>
       handleQuery({ project: "scale-500", filter: { is_blocked: true } })
     );
     expect(blockedMs).toBeLessThan(200);
 
-    const { ms: textMs } = time("swimlanes_query (text search)", () =>
+    const { ms: textMs } = time("graph_query (text search)", () =>
       handleQuery({ project: "scale-500", filter: { text: "auth" } })
     );
     expect(textMs).toBeLessThan(200);
 
-    const { ms: propMs } = time("swimlanes_query (property filter)", () =>
+    const { ms: propMs } = time("graph_query (property filter)", () =>
       handleQuery({ project: "scale-500", filter: { properties: { domain: "area-2" } } })
     );
     expect(propMs).toBeLessThan(200);
 
-    const { ms: openMs } = time("swimlanes_open (summary)", () =>
+    const { ms: openMs } = time("graph_open (summary)", () =>
       handleOpen({ project: "scale-500" }, AGENT)
     );
     expect(openMs).toBeLessThan(200);
@@ -159,7 +159,7 @@ describe("scale: 500 nodes", () => {
     buildProject("scale-500-resolve", 500);
 
     // Get next actionable
-    const { result: next, ms: nextMs } = time("swimlanes_next (claim)", () =>
+    const { result: next, ms: nextMs } = time("graph_next (claim)", () =>
       handleNext({ project: "scale-500-resolve", claim: true }, AGENT)
     );
     expect(nextMs).toBeLessThan(200);
@@ -168,13 +168,13 @@ describe("scale: 500 nodes", () => {
     const nodeId = next.nodes[0].node.id;
 
     // Resolve it
-    const { result: update, ms: updateMs } = time("swimlanes_update (resolve)", () =>
+    const { result: update, ms: updateMs } = time("graph_update (resolve)", () =>
       handleUpdate({ updates: [{ node_id: nodeId, resolved: true, add_evidence: [{ type: "test", ref: "passed" }] }] }, AGENT)
     );
     expect(updateMs).toBeLessThan(100);
 
     // Context lookup on a deep node
-    const { ms: ctxMs } = time("swimlanes_context (deep read)", () =>
+    const { ms: ctxMs } = time("graph_context (deep read)", () =>
       handleContext({ node_id: nodeId })
     );
     expect(ctxMs).toBeLessThan(100);
@@ -190,19 +190,19 @@ describe("scale: 1000 nodes", () => {
     const { ms: buildMs } = time("build 1000 nodes", () => buildProject("scale-1k", 1000));
     expect(buildMs).toBeLessThan(10000);
 
-    const { result: next, ms: nextMs } = time("swimlanes_next (top 5)", () =>
+    const { result: next, ms: nextMs } = time("graph_next (top 5)", () =>
       handleNext({ project: "scale-1k", count: 5 }, AGENT)
     );
     expect(next.nodes.length).toBeGreaterThan(0);
     expect(nextMs).toBeLessThan(500);
 
-    const { result: query, ms: queryMs } = time("swimlanes_query (actionable)", () =>
+    const { result: query, ms: queryMs } = time("graph_query (actionable)", () =>
       handleQuery({ project: "scale-1k", filter: { is_actionable: true } })
     );
     expect(query.nodes.length).toBeGreaterThan(0);
     expect(queryMs).toBeLessThan(500);
 
-    const { ms: openMs } = time("swimlanes_open (summary)", () =>
+    const { ms: openMs } = time("graph_open (summary)", () =>
       handleOpen({ project: "scale-1k" }, AGENT)
     );
     expect(openMs).toBeLessThan(500);

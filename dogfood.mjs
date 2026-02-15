@@ -4,8 +4,8 @@ import { randomUUID } from "crypto";
 const server = spawn("node", ["dist/index.js"], {
   env: {
     ...process.env,
-    SWIMLANES_AGENT: "claude-code",
-    SWIMLANES_DB: "./swimlanes.db",
+    GRAPH_AGENT: "claude-code",
+    GRAPH_DB: "./graph.db",
   },
   stdio: ["pipe", "pipe", "pipe"],
 });
@@ -55,12 +55,12 @@ async function run() {
     JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n"
   );
 
-  // === CREATE THE SWIMLANES PROJECT PLAN ===
+  // === CREATE THE GRAPH PROJECT PLAN ===
 
   // 1. Open the project
-  const project = await call("swimlanes_open", {
-    project: "swimlanes-v0",
-    goal: "Ship swimlanes v0 — agent-native persistent task graph. MCP server, TypeScript, SQLite.",
+  const project = await call("graph_open", {
+    project: "graph-v0",
+    goal: "Ship graph v0 — agent-native persistent task graph. MCP server, TypeScript, SQLite.",
   });
   const rootId = project.root.id;
   console.log("Project created:", project.root.summary);
@@ -68,7 +68,7 @@ async function run() {
   console.log();
 
   // 2. Plan the remaining work
-  const plan = await call("swimlanes_plan", {
+  const plan = await call("graph_plan", {
     nodes: [
       // Hardening
       {
@@ -103,13 +103,13 @@ async function run() {
       {
         ref: "distribution",
         parent_ref: rootId,
-        summary: "Make swimlanes easy to install and configure",
+        summary: "Make graph easy to install and configure",
         properties: { priority: 8 },
       },
       {
         ref: "npx-support",
         parent_ref: "distribution",
-        summary: "Make 'npx swimlanes' work — ensure bin field, shebang, and package.json are correct",
+        summary: "Make 'npx graph' work — ensure bin field, shebang, and package.json are correct",
         context_links: ["package.json", "tsup.config.ts"],
         properties: { priority: 9, domain: "infra" },
       },
@@ -154,7 +154,7 @@ async function run() {
       {
         ref: "dogfood",
         parent_ref: rootId,
-        summary: "Use swimlanes to build swimlanes — validate with real agent workflows",
+        summary: "Use graph to build graph — validate with real agent workflows",
         depends_on: ["hardening"],
         properties: { priority: 9 },
       },
@@ -206,8 +206,8 @@ async function run() {
   console.log();
 
   // 3. Check what's actionable
-  const next = await call("swimlanes_next", {
-    project: "swimlanes-v0",
+  const next = await call("graph_next", {
+    project: "graph-v0",
     count: 5,
   });
   console.log("Next actionable tasks (ranked):");
@@ -221,8 +221,8 @@ async function run() {
   console.log();
 
   // 4. Check what's blocked
-  const blocked = await call("swimlanes_query", {
-    project: "swimlanes-v0",
+  const blocked = await call("graph_query", {
+    project: "graph-v0",
     filter: { is_blocked: true },
   });
   console.log(`Blocked tasks (${blocked.total}):`);
@@ -232,7 +232,7 @@ async function run() {
   console.log();
 
   // 5. Overall summary
-  const summary = await call("swimlanes_open", { project: "swimlanes-v0" });
+  const summary = await call("graph_open", { project: "graph-v0" });
   console.log("Project summary:", JSON.stringify(summary.summary, null, 2));
 
   server.kill();

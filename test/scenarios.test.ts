@@ -71,7 +71,7 @@ describe("deep decomposition", () => {
     expect(actionable.nodes[0].summary).toBe("The Leaf Task");
   });
 
-  it("ancestor chain is complete in swimlanes_next", () => {
+  it("ancestor chain is complete in graph_next", () => {
     const { root } = handleOpen({ project: "deep", goal: "Root" }, "agent") as any;
 
     handlePlan({

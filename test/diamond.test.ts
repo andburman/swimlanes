@@ -117,7 +117,7 @@ describe("diamond dependency", () => {
     expect(next.nodes[0].node.summary).toBe("A — top task");
   });
 
-  it("full diamond walkthrough via swimlanes_next", () => {
+  it("full diamond walkthrough via graph_next", () => {
     const { ids } = setupDiamond();
 
     // Step 1: next gives D
@@ -278,7 +278,7 @@ describe("wide fan-in", () => {
     const result = handleUpdate({ updates: [{ node_id: ids[`dep-${depCount - 1}`], resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     expect(result.newly_actionable!.some((n) => n.summary === "Target — needs all deps")).toBe(true);
 
-    // swimlanes_next should return it (highest priority)
+    // graph_next should return it (highest priority)
     const next = handleNext({ project: "fan-in" }, AGENT);
     expect(next.nodes[0].node.summary).toBe("Target — needs all deps");
   });

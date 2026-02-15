@@ -1,9 +1,9 @@
-// Reusable swimlanes CLI helper
+// Reusable graph CLI helper
 import { spawn } from "child_process";
 import { randomUUID } from "crypto";
 
 const server = spawn("node", ["dist/index.js"], {
-  env: { ...process.env, SWIMLANES_AGENT: "claude-code", SWIMLANES_DB: "./swimlanes.db" },
+  env: { ...process.env, GRAPH_AGENT: "claude-code", GRAPH_DB: "./graph.db" },
   stdio: ["pipe", "pipe", "pipe"],
 });
 
@@ -41,20 +41,20 @@ const cmd = process.argv[2];
 const arg = process.argv[3];
 
 if (cmd === "next") {
-  const r = await call("swimlanes_next", { project: "swimlanes-v0", count: parseInt(arg || "5") });
+  const r = await call("graph_next", { project: "graph-v0", count: parseInt(arg || "5") });
   for (const n of r.nodes) {
     console.log(`[P${n.node.properties.priority ?? 0}] ${n.node.summary}`);
     console.log(`     id: ${n.node.id}`);
   }
 } else if (cmd === "resolve") {
-  const r = await call("swimlanes_update", { updates: [{ node_id: arg, resolved: true }] });
+  const r = await call("graph_update", { updates: [{ node_id: arg, resolved: true }] });
   console.log("Resolved. Rev:", r.updated[0].rev);
   if (r.newly_actionable?.length) console.log("Unblocked:", r.newly_actionable.map(n => n.summary).join(", "));
 } else if (cmd === "summary") {
-  const r = await call("swimlanes_open", { project: "swimlanes-v0" });
+  const r = await call("graph_open", { project: "graph-v0" });
   console.log(JSON.stringify(r.summary, null, 2));
 } else if (cmd === "blocked") {
-  const r = await call("swimlanes_query", { project: "swimlanes-v0", filter: { is_blocked: true } });
+  const r = await call("graph_query", { project: "graph-v0", filter: { is_blocked: true } });
   for (const n of r.nodes) console.log(`  ${n.summary} (${n.id})`);
 } else {
   console.log("Usage: node sl.mjs [next|resolve <id>|summary|blocked]");

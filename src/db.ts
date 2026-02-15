@@ -11,7 +11,7 @@ export function getDb(): Database.Database {
 }
 
 export function initDb(dbPath?: string): Database.Database {
-  const resolvedPath = dbPath ?? path.resolve("swimlanes.db");
+  const resolvedPath = dbPath ?? path.resolve("graph.db");
   db = new Database(resolvedPath);
 
   db.pragma("journal_mode = WAL");

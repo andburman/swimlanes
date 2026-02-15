@@ -4,8 +4,8 @@ import { randomUUID } from "crypto";
 const server = spawn("node", ["dist/index.js"], {
   env: {
     ...process.env,
-    SWIMLANES_AGENT: "test-agent",
-    SWIMLANES_DB: ":memory:",
+    GRAPH_AGENT: "test-agent",
+    GRAPH_DB: ":memory:",
   },
   stdio: ["pipe", "pipe", "pipe"],
 });
@@ -72,8 +72,8 @@ async function run() {
 
     // 1. Open project
     const openResult = await send("tools/call", {
-      name: "swimlanes_open",
-      arguments: { project: "test-project", goal: "Build swimlanes" },
+      name: "graph_open",
+      arguments: { project: "test-project", goal: "Build graph" },
     });
     const openData = JSON.parse(openResult.result.content[0].text);
     const rootId = openData.root.id;
@@ -81,7 +81,7 @@ async function run() {
 
     // 2. Plan: create tasks
     const planResult = await send("tools/call", {
-      name: "swimlanes_plan",
+      name: "graph_plan",
       arguments: {
         nodes: [
           {
@@ -119,7 +119,7 @@ async function run() {
 
     // 3. Next: should return "db" (highest priority, no deps)
     const nextResult = await send("tools/call", {
-      name: "swimlanes_next",
+      name: "graph_next",
       arguments: { project: "test-project" },
     });
     const nextData = JSON.parse(nextResult.result.content[0].text);
@@ -132,7 +132,7 @@ async function run() {
 
     // 4. Context: inspect the api task
     const ctxResult = await send("tools/call", {
-      name: "swimlanes_context",
+      name: "graph_context",
       arguments: { node_id: idMap.api },
     });
     const ctxData = JSON.parse(ctxResult.result.content[0].text);
@@ -146,7 +146,7 @@ async function run() {
 
     // 5. Update: resolve db task
     const updateResult = await send("tools/call", {
-      name: "swimlanes_update",
+      name: "graph_update",
       arguments: {
         updates: [
           {
@@ -170,7 +170,7 @@ async function run() {
 
     // 6. Next again: should return "api" now
     const next2 = await send("tools/call", {
-      name: "swimlanes_next",
+      name: "graph_next",
       arguments: { project: "test-project", claim: true },
     });
     const next2Data = JSON.parse(next2.result.content[0].text);
@@ -183,7 +183,7 @@ async function run() {
 
     // 7. Query: find blocked tasks
     const queryResult = await send("tools/call", {
-      name: "swimlanes_query",
+      name: "graph_query",
       arguments: {
         project: "test-project",
         filter: { is_blocked: true },
@@ -197,7 +197,7 @@ async function run() {
 
     // 8. Connect: add a relates_to edge
     const connResult = await send("tools/call", {
-      name: "swimlanes_connect",
+      name: "graph_connect",
       arguments: {
         edges: [{ from: idMap.api, to: idMap.tests, type: "relates_to" }],
       },
@@ -207,7 +207,7 @@ async function run() {
 
     // 9. Restructure: drop tests
     const restrResult = await send("tools/call", {
-      name: "swimlanes_restructure",
+      name: "graph_restructure",
       arguments: {
         operations: [
           { op: "drop", node_id: idMap.tests, reason: "Deferring to v2" },
@@ -222,7 +222,7 @@ async function run() {
 
     // 10. History: check audit trail for db task
     const histResult = await send("tools/call", {
-      name: "swimlanes_history",
+      name: "graph_history",
       arguments: { node_id: idMap.db },
     });
     const histData = JSON.parse(histResult.result.content[0].text);
@@ -233,7 +233,7 @@ async function run() {
 
     // 11. Open again: check summary
     const open2 = await send("tools/call", {
-      name: "swimlanes_open",
+      name: "graph_open",
       arguments: { project: "test-project" },
     });
     const open2Data = JSON.parse(open2.result.content[0].text);
@@ -241,7 +241,7 @@ async function run() {
 
     // 12. List all projects
     const listResult = await send("tools/call", {
-      name: "swimlanes_open",
+      name: "graph_open",
       arguments: {},
     });
     const listData = JSON.parse(listResult.result.content[0].text);

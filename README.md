@@ -1,4 +1,4 @@
-# Swimlanes
+# Graph
 
 Agent-native persistent task graph. Not an issue tracker — a structured reasoning substrate for agents.
 
@@ -8,7 +8,7 @@ Agents create, decompose, execute, and replan work across sessions. Humans initi
 
 Traditional issue trackers (Jira, Linear) are built around human constraints: columns, boards, discrete states, flat priority. When agents talk to them via MCP, they waste tokens on UI metadata and require 6+ round trips for simple workflows.
 
-Swimlanes gives agents what they actually need:
+Graph gives agents what they actually need:
 - **Persistent task graph** — survives across sessions
 - **Arbitrary nesting** — agents decompose as deep as needed
 - **Explicit dependencies** — with cycle detection
@@ -18,8 +18,8 @@ Swimlanes gives agents what they actually need:
 ## Install
 
 ```bash
-git clone https://github.com/andburman/swimlanes.git
-cd swimlanes
+git clone https://github.com/andburman/graph.git
+cd graph
 npm install
 npm run build
 ```
@@ -31,12 +31,12 @@ Add to your Claude Code MCP config (`.mcp.json` in your project root):
 ```json
 {
   "mcpServers": {
-    "swimlanes": {
+    "graph": {
       "command": "node",
-      "args": ["/path/to/swimlanes/dist/index.js"],
+      "args": ["/path/to/graph/dist/index.js"],
       "env": {
-        "SWIMLANES_AGENT": "claude-code",
-        "SWIMLANES_DB": "/path/to/swimlanes.db"
+        "GRAPH_AGENT": "claude-code",
+        "GRAPH_DB": "/path/to/graph.db"
       }
     }
   }
@@ -44,42 +44,42 @@ Add to your Claude Code MCP config (`.mcp.json` in your project root):
 ```
 
 Environment variables:
-- `SWIMLANES_AGENT` — agent identity, attached to all writes (default: `default-agent`)
-- `SWIMLANES_DB` — SQLite database path (default: `./swimlanes.db`)
-- `SWIMLANES_CLAIM_TTL` — soft claim expiry in minutes (default: `60`)
+- `GRAPH_AGENT` — agent identity, attached to all writes (default: `default-agent`)
+- `GRAPH_DB` — SQLite database path (default: `./graph.db`)
+- `GRAPH_CLAIM_TTL` — soft claim expiry in minutes (default: `60`)
 
 ## Tools
 
-### swimlanes_open
+### graph_open
 Open or create a project. No args = list all projects.
 
-### swimlanes_plan
+### graph_plan
 Batch create nodes with parent-child and dependency relationships. Atomic.
 
-### swimlanes_next
+### graph_next
 Get the next actionable node — unresolved leaf, all deps resolved, ranked by priority/depth/recency. Optional soft claim.
 
-### swimlanes_context
+### graph_context
 Deep-read a node: ancestors, children tree, dependency graph.
 
-### swimlanes_update
+### graph_update
 Update nodes: resolve, change state, add evidence/context links. Reports newly unblocked tasks.
 
-### swimlanes_connect
+### graph_connect
 Add or remove dependency and relationship edges. Cycle detection on depends_on.
 
-### swimlanes_query
+### graph_query
 Search and filter nodes by state, properties, text, ancestry, actionability.
 
-### swimlanes_restructure
+### graph_restructure
 Move, merge, or drop nodes. For replanning.
 
-### swimlanes_history
+### graph_history
 Read the audit trail for a node.
 
 ## Token Efficiency
 
-Swimlanes is designed to minimize token overhead. Every response is compact JSON — no UI metadata, no rich objects, no avatar URLs.
+Graph is designed to minimize token overhead. Every response is compact JSON — no UI metadata, no rich objects, no avatar URLs.
 
 | Operation | Request | Response | Round trips |
 |---|---|---|---|
@@ -103,7 +103,7 @@ For comparison, the same workflow through a traditional tracker's MCP integratio
 
 **~90% token reduction, ~50% fewer round trips.**
 
-Real-world validation: swimlanes was used to plan and track its own development. An agent resuming work in a new session called `swimlanes_open` + `swimlanes_query` and got full project status (18 tasks, dependencies, what's blocked, what's actionable) in ~280 tokens total.
+Real-world validation: graph was used to plan and track its own development. An agent resuming work in a new session called `graph_open` + `graph_query` and got full project status (18 tasks, dependencies, what's blocked, what's actionable) in ~280 tokens total.
 
 ## Design
 

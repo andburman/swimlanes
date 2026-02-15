@@ -1,4 +1,4 @@
-# Swimlanes — Implementation Plan
+# Graph — Implementation Plan
 
 ## Overview
 Build an MCP server in TypeScript that implements the 9 tools defined in TOOLS.md.
@@ -13,23 +13,23 @@ SQLite storage. Local-only. No UI.
 
 ## Phase 2: Core Tools
 Implement in this order (each builds on the previous):
-1. **swimlanes_open** — create/resume/list projects. Needs: node CRUD, basic queries.
-2. **swimlanes_plan** — batch create with ref resolution. Needs: node CRUD, edge management, atomic transactions.
-3. **swimlanes_update** — modify nodes, compute `newly_actionable`. Needs: dependency graph traversal.
-4. **swimlanes_connect** — add/remove edges. Needs: edge management, cycle detection.
-5. **swimlanes_context** — deep read with tree traversal. Needs: recursive queries.
-6. **swimlanes_query** — filtered search with pagination. Needs: dynamic query building.
-7. **swimlanes_next** — ranked actionable node selection. Needs: dependency resolution, ranking logic, soft claims.
-8. **swimlanes_restructure** — move, merge, drop. Needs: all of the above.
-9. **swimlanes_history** — read audit trail. Needs: events table queries.
+1. **graph_open** — create/resume/list projects. Needs: node CRUD, basic queries.
+2. **graph_plan** — batch create with ref resolution. Needs: node CRUD, edge management, atomic transactions.
+3. **graph_update** — modify nodes, compute `newly_actionable`. Needs: dependency graph traversal.
+4. **graph_connect** — add/remove edges. Needs: edge management, cycle detection.
+5. **graph_context** — deep read with tree traversal. Needs: recursive queries.
+6. **graph_query** — filtered search with pagination. Needs: dynamic query building.
+7. **graph_next** — ranked actionable node selection. Needs: dependency resolution, ranking logic, soft claims.
+8. **graph_restructure** — move, merge, drop. Needs: all of the above.
+9. **graph_history** — read audit trail. Needs: events table queries.
 
 ## Phase 3: MCP Server
 1. **MCP server wrapper** — register all 9 tools with the MCP SDK
-2. **Config loading** — agent_identity, db_path, claim_ttl from swimlanes.config.yaml
+2. **Config loading** — agent_identity, db_path, claim_ttl from graph.config.yaml
 3. **Error handling** — structured error responses (not crashes) for: node_not_found, cycle_detected, stale_rev, etc.
 
 ## Phase 4: Dogfood
-1. **Use swimlanes to build swimlanes** — configure Claude Code to use the MCP server, plan remaining work as a swimlanes project
+1. **Use graph to build graph** — configure Claude Code to use the MCP server, plan remaining work as a graph project
 2. **Fix what's broken** — the tool surface WILL need adjustment once a real agent uses it
 3. **Token measurement** — verify the budget estimates from TOOLS.md against real usage
 
@@ -88,6 +88,6 @@ CREATE INDEX idx_events_node ON events(node_id);
 
 ## Open questions for during implementation
 - ID generation: UUID v7 (sortable) or short nanoid?
-- Should `swimlanes_next` ranking be configurable per-project or hardcoded?
-- How to handle `swimlanes_plan` when one node in the batch references a nonexistent parent — fail entire batch or partial success?
+- Should `graph_next` ranking be configurable per-project or hardcoded?
+- How to handle `graph_plan` when one node in the batch references a nonexistent parent — fail entire batch or partial success?
 - MCP server transport: stdio (for Claude Code) or HTTP+SSE (for broader use)? Probably stdio first.

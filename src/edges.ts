@@ -180,8 +180,8 @@ export function findNewlyActionable(
              WHERE e.type = 'depends_on' AND e.to_node IN (${placeholders})
            )
            OR
-           -- children of resolved nodes (parent might now be a non-leaf)
-           n.parent IN (${placeholders})
+           -- parents of resolved nodes (might now be leaf if all children resolved)
+           n.id IN (SELECT parent FROM nodes WHERE id IN (${placeholders}) AND parent IS NOT NULL)
          )
          -- is a leaf (no unresolved children)
          AND NOT EXISTS (

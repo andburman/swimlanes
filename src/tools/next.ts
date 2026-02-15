@@ -64,7 +64,7 @@ export function handleNext(
     AND (
       json_extract(n.properties, '$._claimed_by') IS NULL
       OR json_extract(n.properties, '$._claimed_by') = ?
-      OR json_extract(n.properties, '$._claimed_at') < ?
+      OR json_extract(n.properties, '$._claimed_at') <= ?
     )
   `;
   params.push(agent, claimCutoff);

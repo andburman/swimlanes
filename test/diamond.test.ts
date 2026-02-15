@@ -89,8 +89,8 @@ describe("diamond dependency", () => {
   it("resolving B alone does not unblock A", () => {
     const { ids } = setupDiamond();
 
-    handleUpdate({ updates: [{ node_id: ids.d, resolved: true }] }, AGENT);
-    const result = handleUpdate({ updates: [{ node_id: ids.b, resolved: true }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.d, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
+    const result = handleUpdate({ updates: [{ node_id: ids.b, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
 
     // A should not be in newly_actionable (C is still unresolved)
     const actionableSummaries = (result.newly_actionable ?? []).map((n) => n.summary);
@@ -105,9 +105,9 @@ describe("diamond dependency", () => {
   it("resolving both B and C unblocks A", () => {
     const { ids } = setupDiamond();
 
-    handleUpdate({ updates: [{ node_id: ids.d, resolved: true }] }, AGENT);
-    handleUpdate({ updates: [{ node_id: ids.b, resolved: true }] }, AGENT);
-    const result = handleUpdate({ updates: [{ node_id: ids.c, resolved: true }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.d, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.b, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
+    const result = handleUpdate({ updates: [{ node_id: ids.c, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
 
     // A should now be actionable
     const actionableSummaries = result.newly_actionable!.map((n) => n.summary);
@@ -125,7 +125,7 @@ describe("diamond dependency", () => {
     expect(step1.nodes[0].node.summary).toBe("D — base task");
 
     // Resolve D
-    handleUpdate({ updates: [{ node_id: ids.d, resolved: true }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.d, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
 
     // Step 2: next gives B (higher priority than C)
     const step2 = handleNext({ project: "diamond", claim: true }, AGENT);
@@ -135,21 +135,21 @@ describe("diamond dependency", () => {
     expect(step2all.nodes).toHaveLength(2);
 
     // Resolve B
-    handleUpdate({ updates: [{ node_id: ids.b, resolved: true }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.b, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
 
     // Step 3: next gives C (only actionable)
     const step3 = handleNext({ project: "diamond" }, AGENT);
     expect(step3.nodes[0].node.summary).toBe("C — right branch");
 
     // Resolve C
-    handleUpdate({ updates: [{ node_id: ids.c, resolved: true }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.c, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
 
     // Step 4: next gives A
     const step4 = handleNext({ project: "diamond" }, AGENT);
     expect(step4.nodes[0].node.summary).toBe("A — top task");
 
     // Resolve A
-    handleUpdate({ updates: [{ node_id: ids.a, resolved: true }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.a, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
 
     // All done — root is now the only actionable
     // 4 resolved (D, B, C, A), root still unresolved
@@ -171,7 +171,7 @@ describe("diamond dependency", () => {
     expect(ctxD.depended_by).toHaveLength(2);
 
     // Resolve D, check B's deps
-    handleUpdate({ updates: [{ node_id: ids.d, resolved: true }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.d, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     const ctxB = handleContext({ node_id: ids.b });
     expect(ctxB.depends_on).toHaveLength(1);
     expect(ctxB.depends_on[0].satisfied).toBe(true);
@@ -214,22 +214,22 @@ describe("double diamond", () => {
     expect(next.nodes[0].node.summary).toBe("A — foundation");
 
     // Resolve A → B unblocks
-    let result = handleUpdate({ updates: [{ node_id: ids.a, resolved: true }] }, AGENT);
+    let result = handleUpdate({ updates: [{ node_id: ids.a, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     expect(result.newly_actionable!.some((n) => n.summary === "B — middle convergence")).toBe(true);
 
     // Resolve B → C and D unblock
-    result = handleUpdate({ updates: [{ node_id: ids.b, resolved: true }] }, AGENT);
+    result = handleUpdate({ updates: [{ node_id: ids.b, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     const unblocked = result.newly_actionable!.map((n) => n.summary).sort();
     expect(unblocked).toContain("C — left upper");
     expect(unblocked).toContain("D — right upper");
     expect(unblocked).not.toContain("E — top convergence");
 
     // Resolve C only — E still blocked
-    result = handleUpdate({ updates: [{ node_id: ids.c, resolved: true }] }, AGENT);
+    result = handleUpdate({ updates: [{ node_id: ids.c, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     expect((result.newly_actionable ?? []).map((n) => n.summary)).not.toContain("E — top convergence");
 
     // Resolve D — E unblocks
-    result = handleUpdate({ updates: [{ node_id: ids.d, resolved: true }] }, AGENT);
+    result = handleUpdate({ updates: [{ node_id: ids.d, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     expect(result.newly_actionable!.some((n) => n.summary === "E — top convergence")).toBe(true);
   });
 });
@@ -268,14 +268,14 @@ describe("wide fan-in", () => {
 
     // Resolve all but the last dep — target still blocked
     for (let i = 0; i < depCount - 1; i++) {
-      handleUpdate({ updates: [{ node_id: ids[`dep-${i}`], resolved: true }] }, AGENT);
+      handleUpdate({ updates: [{ node_id: ids[`dep-${i}`], resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     }
 
     blocked = handleQuery({ project: "fan-in", filter: { is_blocked: true } });
     expect(blocked.nodes).toHaveLength(1);
 
     // Resolve last dep — target unblocks
-    const result = handleUpdate({ updates: [{ node_id: ids[`dep-${depCount - 1}`], resolved: true }] }, AGENT);
+    const result = handleUpdate({ updates: [{ node_id: ids[`dep-${depCount - 1}`], resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     expect(result.newly_actionable!.some((n) => n.summary === "Target — needs all deps")).toBe(true);
 
     // swimlanes_next should return it (highest priority)
@@ -317,7 +317,7 @@ describe("fan-out then fan-in", () => {
     expect(next.nodes[0].node.summary).toBe("Start — kick off work");
 
     // Resolve start → 3 workers unblock
-    let result = handleUpdate({ updates: [{ node_id: ids.start, resolved: true }] }, AGENT);
+    let result = handleUpdate({ updates: [{ node_id: ids.start, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     expect(result.newly_actionable!).toHaveLength(3);
 
     // All 3 workers actionable
@@ -325,9 +325,9 @@ describe("fan-out then fan-in", () => {
     expect(next.nodes).toHaveLength(3);
 
     // Resolve workers one by one
-    handleUpdate({ updates: [{ node_id: ids.w1, resolved: true }] }, AGENT);
-    handleUpdate({ updates: [{ node_id: ids.w2, resolved: true }] }, AGENT);
-    result = handleUpdate({ updates: [{ node_id: ids.w3, resolved: true }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.w1, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: ids.w2, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
+    result = handleUpdate({ updates: [{ node_id: ids.w3, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
 
     // Finish unblocks
     expect(result.newly_actionable!.some((n) => n.summary === "Finish — aggregate results")).toBe(true);

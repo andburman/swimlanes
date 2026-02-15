@@ -9,7 +9,7 @@ import { handleConnect } from "../src/tools/connect.js";
 import { handleQuery } from "../src/tools/query.js";
 import { handleRestructure } from "../src/tools/restructure.js";
 import { handleHistory } from "../src/tools/history.js";
-import { ValidationError } from "../src/validate.js";
+import { ValidationError, EngineError } from "../src/validate.js";
 
 const AGENT = "test-agent";
 
@@ -179,6 +179,50 @@ describe("swimlanes_update", () => {
     expect(result.updated[0].rev).toBe(2);
     expect(result.newly_actionable).toBeDefined();
     expect(result.newly_actionable!.some((n) => n.summary === "B")).toBe(true);
+  });
+
+  it("rejects resolve without evidence", () => {
+    const { root } = handleOpen({ project: "test" }, AGENT) as any;
+    handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "A" }] }, AGENT);
+    const query = handleQuery({ project: "test", filter: { is_actionable: true } });
+    const nodeId = query.nodes[0].id;
+
+    expect(() =>
+      handleUpdate({ updates: [{ node_id: nodeId, resolved: true }] }, AGENT)
+    ).toThrow(EngineError);
+  });
+
+  it("allows resolve with evidence", () => {
+    const { root } = handleOpen({ project: "test" }, AGENT) as any;
+    handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "A" }] }, AGENT);
+    const query = handleQuery({ project: "test", filter: { is_actionable: true } });
+    const nodeId = query.nodes[0].id;
+
+    const result = handleUpdate(
+      { updates: [{ node_id: nodeId, resolved: true, add_evidence: [{ type: "note", ref: "completed" }] }] },
+      AGENT
+    );
+    expect(result.updated[0].rev).toBe(2);
+  });
+
+  it("allows resolve when node already has evidence", () => {
+    const { root } = handleOpen({ project: "test" }, AGENT) as any;
+    handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "A" }] }, AGENT);
+    const query = handleQuery({ project: "test", filter: { is_actionable: true } });
+    const nodeId = query.nodes[0].id;
+
+    // Add evidence first
+    handleUpdate(
+      { updates: [{ node_id: nodeId, add_evidence: [{ type: "note", ref: "work in progress" }] }] },
+      AGENT
+    );
+
+    // Resolve without new evidence — should work because node already has evidence
+    const result = handleUpdate(
+      { updates: [{ node_id: nodeId, resolved: true }] },
+      AGENT
+    );
+    expect(result.updated[0].rev).toBe(3);
   });
 });
 
@@ -370,7 +414,7 @@ describe("full workflow", () => {
 
     // Resolve implement
     const implId = plan.created.find((c) => c.ref === "impl")!.id;
-    handleUpdate({ updates: [{ node_id: implId, resolved: true }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: implId, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
 
     // Next should be "Test"
     const next3 = handleNext({ project: "workflow" }, AGENT);

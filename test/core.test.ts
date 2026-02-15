@@ -233,7 +233,7 @@ describe("edges", () => {
     expect(actionable.map((n) => n.summary)).not.toContain("T2");
 
     // Resolve t1
-    updateNode({ node_id: t1.id, agent: "test", resolved: true });
+    updateNode({ node_id: t1.id, agent: "test", resolved: true, add_evidence: [{ type: "test", ref: "done" }] });
 
     // Now t2 is actionable
     actionable = findNewlyActionable("p1");
@@ -246,7 +246,7 @@ describe("edges", () => {
 describe("events", () => {
   it("logs creation and update events", () => {
     const node = createNode({ project: "p1", summary: "Task", agent: "test" });
-    updateNode({ node_id: node.id, agent: "test", resolved: true });
+    updateNode({ node_id: node.id, agent: "test", resolved: true, add_evidence: [{ type: "test", ref: "done" }] });
 
     const { events } = getEvents(node.id);
     expect(events).toHaveLength(2);

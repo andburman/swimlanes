@@ -205,6 +205,18 @@ export function updateNode(input: UpdateNodeInput): Node {
   let newContextLinks = [...node.context_links];
   let newEvidence = [...node.evidence];
 
+  // [sl:OZ0or-q5TserCEfWUeMVv] Require evidence when resolving
+  if (input.resolved === true && !node.resolved) {
+    const hasExistingEvidence = node.evidence.length > 0;
+    const hasNewEvidence = input.add_evidence && input.add_evidence.length > 0;
+    if (!hasExistingEvidence && !hasNewEvidence) {
+      throw new EngineError(
+        "evidence_required",
+        `Cannot resolve node ${input.node_id} without evidence. Add at least one add_evidence entry (type: 'git', 'note', 'test', etc.) explaining what was done.`
+      );
+    }
+  }
+
   if (input.resolved !== undefined && input.resolved !== node.resolved) {
     changes.push({ field: "resolved", before: node.resolved, after: input.resolved });
     newResolved = input.resolved;

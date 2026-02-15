@@ -210,7 +210,7 @@ describe("scale: 1000 nodes", () => {
     // Full claim-work-resolve cycle
     const { ms: cycleMs } = time("full claim→resolve cycle", () => {
       const n = handleNext({ project: "scale-1k", claim: true }, AGENT);
-      handleUpdate({ updates: [{ node_id: n.nodes[0].node.id, resolved: true }] }, AGENT);
+      handleUpdate({ updates: [{ node_id: n.nodes[0].node.id, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
     });
     expect(cycleMs).toBeLessThan(500);
 

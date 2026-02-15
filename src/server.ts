@@ -131,7 +131,7 @@ const TOOLS = [
   {
     name: "swimlanes_update",
     description:
-      "Update one or more nodes. Can change resolved, state, summary, properties (merged), context_links, and add evidence. When resolving nodes, returns newly_actionable — nodes that became unblocked. IMPORTANT: When resolving a task, always include add_evidence with what was done (type: 'git' for commits, 'note' for implementation details) and add_context_links for files you modified. This evidence is how future agents understand what happened.",
+      "Update one or more nodes. Can change resolved, state, summary, properties (merged), context_links, and add evidence. When resolving nodes, returns newly_actionable — nodes that became unblocked. ENFORCED: Resolving a node requires evidence — the engine rejects resolved=true if the node has no existing evidence and no add_evidence in the call. Include at least one add_evidence entry (type: 'git' for commits, 'note' for what was done and why, 'test' for results). Also add context_links to files you modified.",
     inputSchema: {
       type: "object" as const,
       properties: {

@@ -30,6 +30,7 @@ function migrate(db: Database.Database): void {
       project TEXT NOT NULL,
       summary TEXT NOT NULL,
       resolved INTEGER NOT NULL DEFAULT 0,
+      depth INTEGER NOT NULL DEFAULT 0,
       state TEXT,
       properties TEXT NOT NULL DEFAULT '{}',
       context_links TEXT NOT NULL DEFAULT '[]',
@@ -65,6 +66,25 @@ function migrate(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(from_node, type);
     CREATE INDEX IF NOT EXISTS idx_events_node ON events(node_id);
   `);
+
+  // Migration: add depth column if it doesn't exist (for existing databases)
+  const hasDepth = db.prepare(
+    "SELECT COUNT(*) as cnt FROM pragma_table_info('nodes') WHERE name = 'depth'"
+  ).get() as { cnt: number };
+
+  if (hasDepth.cnt === 0) {
+    db.exec("ALTER TABLE nodes ADD COLUMN depth INTEGER NOT NULL DEFAULT 0");
+    // Backfill depths using recursive CTE
+    db.exec(`
+      WITH RECURSIVE tree(id, depth) AS (
+        SELECT id, 0 FROM nodes WHERE parent IS NULL
+        UNION ALL
+        SELECT n.id, t.depth + 1
+        FROM nodes n JOIN tree t ON n.parent = t.id
+      )
+      UPDATE nodes SET depth = (SELECT depth FROM tree WHERE tree.id = nodes.id)
+    `);
+  }
 }
 
 export function closeDb(): void {

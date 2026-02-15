@@ -77,45 +77,20 @@ export function handleNext(
     }
   }
 
-  // Ranking: priority DESC, depth DESC (approximate via parent chain), updated_at ASC
-  // SQLite can't easily compute depth, so we use a two-step approach:
-  // Fetch candidates, compute depth in JS, then sort
+  // Ranking: priority DESC, depth DESC, updated_at ASC
+  // Depth is cached on the node, priority extracted via json_extract — all in SQL
+  query += `
+    ORDER BY
+      COALESCE(CAST(json_extract(n.properties, '$.priority') AS REAL), 0) DESC,
+      n.depth DESC,
+      n.updated_at ASC
+    LIMIT ?
+  `;
+  params.push(count);
+
   const rows = db.prepare(query).all(...params) as NodeRow[];
 
-  // Batch compute depths using recursive CTE
-  const depthMap = new Map<string, number>();
-  if (rows.length > 0) {
-    const nodeIds = rows.map((r) => r.id);
-    const depthRows = db
-      .prepare(
-        `WITH RECURSIVE ancestors(id, node_id, depth) AS (
-          SELECT n.id, n.id, 0 FROM nodes n WHERE n.id IN (${nodeIds.map(() => "?").join(",")})
-          UNION ALL
-          SELECT n.parent, a.node_id, a.depth + 1
-          FROM ancestors a JOIN nodes n ON n.id = a.id
-          WHERE n.parent IS NOT NULL
-        )
-        SELECT node_id, MAX(depth) as depth FROM ancestors GROUP BY node_id`
-      )
-      .all(...nodeIds) as Array<{ node_id: string; depth: number }>;
-    for (const r of depthRows) depthMap.set(r.node_id, r.depth);
-  }
-
-  const candidates = rows.map((row) => {
-    const props = JSON.parse(row.properties);
-    const priority = typeof props.priority === "number" ? props.priority : 0;
-    const depth = depthMap.get(row.id) ?? 0;
-    return { row, priority, depth };
-  });
-
-  // Sort: priority DESC, depth DESC, updated_at ASC
-  candidates.sort((a, b) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    if (b.depth !== a.depth) return b.depth - a.depth;
-    return a.row.updated_at.localeCompare(b.row.updated_at);
-  });
-
-  const selected = candidates.slice(0, count);
+  const selected = rows.map((row) => ({ row }));
 
   const results: NextResultNode[] = selected.map(({ row }) => {
     const node = getNode(row.id)!;

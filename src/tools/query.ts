@@ -38,54 +38,23 @@ export interface QueryResult {
   next_cursor?: string;
 }
 
-// Get all descendant IDs of a node
+// Get all descendant IDs of a node using recursive CTE
 function getDescendantIds(nodeId: string): string[] {
   const db = getDb();
-  const ids: string[] = [];
-  const stack = [nodeId];
-
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    const children = db
-      .prepare("SELECT id FROM nodes WHERE parent = ?")
-      .all(current) as Array<{ id: string }>;
-
-    for (const child of children) {
-      ids.push(child.id);
-      stack.push(child.id);
-    }
-  }
-
-  return ids;
-}
-
-// Batch compute depths for multiple nodes using recursive CTE
-function computeDepths(nodeIds: string[]): Map<string, number> {
-  if (nodeIds.length === 0) return new Map();
-
-  const db = getDb();
-  const depths = new Map<string, number>();
-
-  // Use a single recursive CTE to compute all depths
   const rows = db
     .prepare(
-      `WITH RECURSIVE ancestors(id, node_id, depth) AS (
-        SELECT n.id, n.id, 0 FROM nodes n WHERE n.id IN (${nodeIds.map(() => "?").join(",")})
+      `WITH RECURSIVE descendants(id) AS (
+        SELECT id FROM nodes WHERE parent = ?
         UNION ALL
-        SELECT n.parent, a.node_id, a.depth + 1
-        FROM ancestors a JOIN nodes n ON n.id = a.id
-        WHERE n.parent IS NOT NULL
+        SELECT n.id FROM nodes n JOIN descendants d ON n.parent = d.id
       )
-      SELECT node_id, MAX(depth) as depth FROM ancestors GROUP BY node_id`
+      SELECT id FROM descendants`
     )
-    .all(...nodeIds) as Array<{ node_id: string; depth: number }>;
+    .all(nodeId) as Array<{ id: string }>;
 
-  for (const row of rows) {
-    depths.set(row.node_id, row.depth);
-  }
-
-  return depths;
+  return rows.map((r) => r.id);
 }
+
 
 export function handleQuery(input: QueryInput): QueryResult {
   const project = requireString(input?.project, "project");
@@ -215,16 +184,13 @@ export function handleQuery(input: QueryInput): QueryResult {
   const hasMore = rows.length > limit;
   const slice = hasMore ? rows.slice(0, limit) : rows;
 
-  // Batch compute depths for all results
-  const depths = computeDepths(slice.map((r) => r.id));
-
   const nodes: QueryResultNode[] = slice.map((row) => ({
     id: row.id,
     summary: row.summary,
     resolved: row.resolved === 1,
     state: row.state ? JSON.parse(row.state) : null,
     parent: row.parent,
-    depth: depths.get(row.id) ?? 0,
+    depth: row.depth,
     properties: JSON.parse(row.properties),
   }));
 

@@ -14,6 +14,7 @@ function rowToNode(row: NodeRow): Node {
     project: row.project,
     summary: row.summary,
     resolved: row.resolved === 1,
+    depth: row.depth,
     state: row.state ? JSON.parse(row.state) : null,
     properties: JSON.parse(row.properties),
     context_links: JSON.parse(row.context_links),
@@ -41,6 +42,13 @@ export function createNode(input: CreateNodeInput): Node {
   const now = new Date().toISOString();
   const id = nanoid();
 
+  // Compute depth from parent
+  let depth = 0;
+  if (input.parent) {
+    const parentRow = db.prepare("SELECT depth FROM nodes WHERE id = ?").get(input.parent) as { depth: number } | undefined;
+    if (parentRow) depth = parentRow.depth + 1;
+  }
+
   const node: Node = {
     id,
     rev: 1,
@@ -48,6 +56,7 @@ export function createNode(input: CreateNodeInput): Node {
     project: input.project,
     summary: input.summary,
     resolved: false,
+    depth,
     state: input.state ?? null,
     properties: input.properties ?? {},
     context_links: input.context_links ?? [],
@@ -58,8 +67,8 @@ export function createNode(input: CreateNodeInput): Node {
   };
 
   db.prepare(`
-    INSERT INTO nodes (id, rev, parent, project, summary, resolved, state, properties, context_links, evidence, created_by, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO nodes (id, rev, parent, project, summary, resolved, depth, state, properties, context_links, evidence, created_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     node.id,
     node.rev,
@@ -67,6 +76,7 @@ export function createNode(input: CreateNodeInput): Node {
     node.project,
     node.summary,
     0,
+    node.depth,
     node.state !== null ? JSON.stringify(node.state) : null,
     JSON.stringify(node.properties),
     JSON.stringify(node.context_links),

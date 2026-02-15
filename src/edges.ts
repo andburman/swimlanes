@@ -157,11 +157,53 @@ export function getEdgesTo(nodeId: string, type?: string): Edge[] {
 }
 
 // --- Find newly actionable nodes ---
-// Nodes that are unresolved, are leaves, and have all depends_on targets resolved
+// Given specific resolved node IDs, find nodes that directly depended on them
+// and are now actionable (all deps resolved, no unresolved children).
+// Falls back to project-wide scan when no specific IDs provided.
 
-export function findNewlyActionable(project: string): Array<{ id: string; summary: string }> {
+export function findNewlyActionable(
+  project: string,
+  resolvedNodeIds?: string[]
+): Array<{ id: string; summary: string }> {
   const db = getDb();
 
+  if (resolvedNodeIds && resolvedNodeIds.length > 0) {
+    // Targeted: only check direct dependents of the resolved nodes + children of resolved nodes
+    const placeholders = resolvedNodeIds.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT n.id, n.summary FROM nodes n
+         WHERE n.resolved = 0 AND n.project = ?
+         AND (
+           -- nodes that had a depends_on edge to one of the resolved nodes
+           n.id IN (
+             SELECT e.from_node FROM edges e
+             WHERE e.type = 'depends_on' AND e.to_node IN (${placeholders})
+           )
+           OR
+           -- children of resolved nodes (parent might now be a non-leaf)
+           n.parent IN (${placeholders})
+         )
+         -- is a leaf (no unresolved children)
+         AND NOT EXISTS (
+           SELECT 1 FROM nodes child WHERE child.parent = n.id AND child.resolved = 0
+         )
+         -- all deps resolved
+         AND NOT EXISTS (
+           SELECT 1 FROM edges e
+           JOIN nodes dep ON dep.id = e.to_node AND dep.resolved = 0
+           WHERE e.from_node = n.id AND e.type = 'depends_on'
+         )`
+      )
+      .all(project, ...resolvedNodeIds, ...resolvedNodeIds) as Array<{
+      id: string;
+      summary: string;
+    }>;
+
+    return rows;
+  }
+
+  // Fallback: project-wide scan
   const rows = db
     .prepare(
       `SELECT n.id, n.summary FROM nodes n

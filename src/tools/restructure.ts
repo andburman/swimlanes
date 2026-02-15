@@ -67,6 +67,15 @@ function getAllDescendants(nodeId: string): string[] {
   return ids;
 }
 
+function recomputeSubtreeDepth(nodeId: string, newDepth: number): void {
+  const db = getDb();
+  db.prepare("UPDATE nodes SET depth = ? WHERE id = ?").run(newDepth, nodeId);
+  const children = db.prepare("SELECT id FROM nodes WHERE parent = ?").all(nodeId) as Array<{ id: string }>;
+  for (const child of children) {
+    recomputeSubtreeDepth(child.id, newDepth + 1);
+  }
+}
+
 function handleMove(op: MoveOp, agent: string): { node_id: string; result: string } {
   const db = getDb();
   const node = getNodeOrThrow(op.node_id);
@@ -79,11 +88,15 @@ function handleMove(op: MoveOp, agent: string): { node_id: string; result: strin
   }
 
   const oldParent = node.parent;
+  const now = new Date().toISOString();
   db.prepare("UPDATE nodes SET parent = ?, updated_at = ? WHERE id = ?").run(
     op.new_parent,
-    new Date().toISOString(),
+    now,
     op.node_id
   );
+
+  // Recompute depth for moved node and all descendants
+  recomputeSubtreeDepth(op.node_id, newParent.depth + 1);
 
   logEvent(op.node_id, agent, "moved", [
     { field: "parent", before: oldParent, after: op.new_parent },
@@ -97,12 +110,16 @@ function handleMerge(op: MergeOp, agent: string): { node_id: string; result: str
   const source = getNodeOrThrow(op.source);
   const target = getNodeOrThrow(op.target);
 
-  // Move source's children to target
+  // Move source's children to target and recompute their depths
+  const movedChildren = db.prepare("SELECT id FROM nodes WHERE parent = ?").all(op.source) as Array<{ id: string }>;
   db.prepare("UPDATE nodes SET parent = ?, updated_at = ? WHERE parent = ?").run(
     op.target,
     new Date().toISOString(),
     op.source
   );
+  for (const child of movedChildren) {
+    recomputeSubtreeDepth(child.id, target.depth + 1);
+  }
 
   // Append source's evidence to target
   const targetEvidence: Evidence[] = [...target.evidence, ...source.evidence];

@@ -36,7 +36,7 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
   }
 
   const updated: Array<{ node_id: string; rev: number }> = [];
-  let anyResolved = false;
+  const resolvedIds: string[] = [];
   let project: string | null = null;
 
   for (const entry of updates) {
@@ -55,15 +55,15 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
     updated.push({ node_id: node.id, rev: node.rev });
 
     if (entry.resolved === true) {
-      anyResolved = true;
+      resolvedIds.push(node.id);
       project = node.project;
     }
   }
 
   const result: UpdateResult = { updated };
 
-  if (anyResolved && project) {
-    result.newly_actionable = findNewlyActionable(project);
+  if (resolvedIds.length > 0 && project) {
+    result.newly_actionable = findNewlyActionable(project, resolvedIds);
   }
 
   return result;

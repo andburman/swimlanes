@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "swimlanes": {
+      "command": "node",
+      "args": ["/Users/burman/repos/swimlanes/dist/index.js"],
+      "env": {
+        "SWIMLANES_AGENT": "claude-code",
+        "SWIMLANES_DB": "/Users/burman/repos/swimlanes/swimlanes.db"
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "swimlanes",
+  "version": "0.1.0",
+  "description": "Agent-native persistent task graph. MCP server for agent planning and execution across sessions.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "swimlanes": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "mcp",
+    "agents",
+    "task-graph",
+    "planning"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "better-sqlite3": "^12.6.2",
+    "nanoid": "^5.1.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.2.3",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}

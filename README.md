@@ -149,7 +149,7 @@ Environment variables (all optional):
 | Variable | Default | Description |
 |---|---|---|
 | `GRAPH_AGENT` | `default-agent` | Agent identity, attached to all writes |
-| `GRAPH_DB` | `./graph.db` | SQLite database path |
+| `GRAPH_DB` | `~/.graph/db/<hash>/graph.db` | SQLite database path. Defaults to a per-project directory in your home folder — no files in your repo. |
 | `GRAPH_CLAIM_TTL` | `60` | Soft claim expiry in minutes |
 
 ## Tools
@@ -187,11 +187,10 @@ The same workflow through a traditional tracker's MCP integration typically cost
 
 Graph is fully local. Your data never leaves your machine.
 
-- **Single SQLite file** — everything is stored in one `.db` file at the path you configure via `GRAPH_DB`. Default: `./graph.db` in the working directory.
+- **Single SQLite file** — everything is stored in one `.db` file. By default it lives in `~/.graph/db/` — outside your repo, nothing to gitignore.
 - **No network calls** — Graph is a stdio MCP server. It reads and writes to disk. There is no telemetry, no cloud sync, no external API calls.
 - **No secrets in the graph** — Graph stores task summaries, evidence notes, and file path references. It does not read file contents, access credentials, or store source code.
 - **You control the data** — the SQLite file is yours. Back it up, delete it, move it between machines. There is no account, no server, no lock-in.
-- **Gitignore it** — add `*.db` to your `.gitignore`. The graph contains project-specific planning data that doesn't belong in version control.
 
 ## Design
 

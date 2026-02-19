@@ -2,23 +2,31 @@ import Database from "better-sqlite3";
 import path from "path";
 
 let db: Database.Database;
+let dbPath: string;
+
+export function setDbPath(p: string): void {
+  dbPath = p;
+}
 
 export function getDb(): Database.Database {
   if (!db) {
-    throw new Error("Database not initialized. Call initDb() first.");
+    const resolvedPath = dbPath ?? path.resolve("graph.db");
+    db = new Database(resolvedPath);
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+    migrate(db);
   }
   return db;
 }
 
-export function initDb(dbPath?: string): Database.Database {
-  const resolvedPath = dbPath ?? path.resolve("graph.db");
-  db = new Database(resolvedPath);
-
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-
-  migrate(db);
-  return db;
+export function initDb(p?: string): Database.Database {
+  // Close existing db if any (used by tests to reset state)
+  if (db) {
+    db.close();
+    db = undefined!;
+  }
+  if (p) dbPath = p;
+  return getDb();
 }
 
 function migrate(db: Database.Database): void {

@@ -4,7 +4,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { initDb, closeDb } from "./db.js";
+import { setDbPath, closeDb } from "./db.js";
 import { ValidationError, EngineError } from "./validate.js";
 import { handleOpen } from "./tools/open.js";
 import { handlePlan } from "./tools/plan.js";
@@ -20,10 +20,24 @@ import { handleAgentConfig } from "./tools/agent-config.js";
 import { getLicenseTier, type Tier } from "./license.js";
 import { checkNodeLimit, checkProjectLimit, capEvidenceLimit, checkScope } from "./gates.js";
 
+import { createHash } from "crypto";
+import { mkdirSync } from "fs";
+import { homedir } from "os";
+import { join, resolve } from "path";
+
 // Config from env
 const AGENT_IDENTITY = process.env.GRAPH_AGENT ?? "default-agent";
-const DB_PATH = process.env.GRAPH_DB ?? "./graph.db";
 const CLAIM_TTL = parseInt(process.env.GRAPH_CLAIM_TTL ?? "60", 10);
+
+function defaultDbPath(): string {
+  const projectDir = resolve(".");
+  const hash = createHash("sha256").update(projectDir).digest("hex").slice(0, 16);
+  const dir = join(homedir(), ".graph", "db", hash);
+  mkdirSync(dir, { recursive: true });
+  return join(dir, "graph.db");
+}
+
+const DB_PATH = process.env.GRAPH_DB ?? defaultDbPath();
 
 // Tool definitions
 const TOOLS = [
@@ -328,10 +342,10 @@ const TOOLS = [
 ];
 
 export async function startServer(): Promise<void> {
-  // Init database
-  initDb(DB_PATH);
+  // Set database path — db is created lazily on first tool call
+  setDbPath(DB_PATH);
 
-  // [sl:N0IDVJQIhENQFsov6-Lhg] Resolve license tier once at startup
+  // [sl:N0IDVJQIhENQFsov6-Lhg] Resolve license tier once at startup (reads license file, doesn't touch db)
   const tier: Tier = getLicenseTier(DB_PATH);
 
   const server = new Server(

@@ -1,5 +1,5 @@
 {
-  "name": "graph",
+  "name": "@graph-tl/graph",
   "version": "0.1.0",
   "description": "Agent-native persistent task graph. MCP server for agent planning and execution across sessions.",
   "type": "module",
@@ -10,6 +10,10 @@
   "files": [
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Graph-tl/graph.git"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",

@@ -116,6 +116,26 @@ Comments are a snapshot. Graph turns your codebase into a traceable history of d
 
 ## Install
 
+Add to your Claude Code MCP config (`.mcp.json` in your project root):
+
+```json
+{
+  "mcpServers": {
+    "graph": {
+      "command": "npx",
+      "args": ["-y", "@graph-tl/graph"],
+      "env": {
+        "GRAPH_AGENT": "claude-code"
+      }
+    }
+  }
+}
+```
+
+That's it. No cloning, no building. npx handles everything.
+
+### From source
+
 ```bash
 git clone https://github.com/Graph-tl/graph.git
 cd graph
@@ -123,19 +143,16 @@ npm install
 npm run build
 ```
 
-## Configure
-
-Add to your Claude Code MCP config (`.mcp.json` in your project root):
+Then point your `.mcp.json` at the local build:
 
 ```json
 {
   "mcpServers": {
     "graph": {
       "command": "node",
-      "args": ["/path/to/graph/dist/index.js"],
+      "args": ["./graph/dist/index.js"],
       "env": {
-        "GRAPH_AGENT": "claude-code",
-        "GRAPH_DB": "/path/to/graph.db"
+        "GRAPH_AGENT": "claude-code"
       }
     }
   }

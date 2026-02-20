@@ -153,11 +153,10 @@ describe("diamond dependency", () => {
     // Resolve A
     handleUpdate({ updates: [{ node_id: ids.a, resolved: true, add_evidence: [{ type: "test", ref: "done" }] }] }, AGENT);
 
-    // All done — root is now the only actionable
-    // 4 resolved (D, B, C, A), root still unresolved
+    // All done — root auto-resolved because all children (D, B, C, A) are resolved
     const summary = handleOpen({ project: "diamond" }, AGENT) as any;
-    expect(summary.summary.resolved).toBe(4);
-    expect(summary.summary.actionable).toBe(1); // root
+    expect(summary.summary.resolved).toBe(5); // D, B, C, A + root (auto-resolved)
+    expect(summary.summary.actionable).toBe(0);
   });
 
   it("context shows dependency satisfaction status", () => {

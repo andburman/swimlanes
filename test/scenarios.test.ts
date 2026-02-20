@@ -98,7 +98,7 @@ describe("deep decomposition", () => {
     expect(next.nodes[0].ancestors.map((a) => a.summary)).toEqual(["Root", "A", "B", "C", "D"]);
   });
 
-  it("resolving leaf makes parent actionable, cascades up", () => {
+  it("resolving leaf auto-resolves single-child chain", () => {
     const { root } = openProject("deep", "deep", "agent") as any;
 
     const plan = handlePlan({
@@ -115,17 +115,17 @@ describe("deep decomposition", () => {
     expect(actionable.nodes).toHaveLength(1);
     expect(actionable.nodes[0].summary).toBe("Child");
 
-    // Resolve child — parent becomes actionable
+    // Resolve child — parent and root auto-resolve (single-child chains cascade)
     const result = handleUpdate({
       updates: [{ node_id: ids.child, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
     }, "agent");
-    expect(result.newly_actionable!.some((n) => n.summary === "Parent")).toBe(true);
+    expect(result.auto_resolved!.some((n) => n.summary === "Parent")).toBe(true);
+    expect(result.auto_resolved!.some((n) => n.summary === "deep")).toBe(true);
 
-    // Resolve parent — root becomes actionable
-    const result2 = handleUpdate({
-      updates: [{ node_id: ids.parent, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
-    }, "agent");
-    expect(result2.newly_actionable!.some((n) => n.summary === "deep")).toBe(true);
+    // Everything is resolved
+    const summary = handleOpen({ project: "deep" }, "agent") as any;
+    expect(summary.summary.resolved).toBe(3); // child + parent + root
+    expect(summary.summary.actionable).toBe(0);
   });
 });
 
@@ -444,7 +444,7 @@ describe("cross-session pickup", () => {
 describe("cascade resolution", () => {
   // Single-child chain: resolving the leaf cascades actionability up
 
-  it("single-child chain cascades up level by level", () => {
+  it("single-child chain auto-resolves entirely when leaf resolves", () => {
     const { root } = openProject("cascade", "Cascade", "agent") as any;
 
     const plan = handlePlan({
@@ -461,29 +461,70 @@ describe("cascade resolution", () => {
     let next = handleNext({ project: "cascade" }, "agent");
     expect(next.nodes[0].node.summary).toBe("Child");
 
-    // Resolve child → parent becomes actionable
-    let result = handleUpdate({
+    // Resolve child → entire chain auto-resolves (parent → grandparent → root)
+    const result = handleUpdate({
       updates: [{ node_id: ids.child, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
     }, "agent");
-    expect(result.newly_actionable!.some((n) => n.summary === "Parent")).toBe(true);
 
-    next = handleNext({ project: "cascade" }, "agent");
-    expect(next.nodes[0].node.summary).toBe("Parent");
+    const autoResolved = result.auto_resolved!.map((n) => n.summary);
+    expect(autoResolved).toContain("Parent");
+    expect(autoResolved).toContain("Grandparent");
+    expect(autoResolved).toContain("Cascade"); // root
 
-    // Resolve parent → grandparent becomes actionable
-    result = handleUpdate({
-      updates: [{ node_id: ids.parent, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
+    // Everything is resolved
+    const summary = handleOpen({ project: "cascade" }, "agent") as any;
+    expect(summary.summary.resolved).toBe(4); // child + parent + grandparent + root
+    expect(summary.summary.actionable).toBe(0);
+  });
+
+  it("auto-resolved nodes get synthetic evidence", () => {
+    const { root } = openProject("evidence", "Evidence", "agent") as any;
+
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Parent" },
+        { ref: "child", parent_ref: "parent", summary: "Child" },
+      ],
     }, "agent");
-    expect(result.newly_actionable!.some((n) => n.summary === "Grandparent")).toBe(true);
 
-    next = handleNext({ project: "cascade" }, "agent");
-    expect(next.nodes[0].node.summary).toBe("Grandparent");
+    const ids = Object.fromEntries(plan.created.map((c: any) => [c.ref, c.id]));
 
-    // Resolve grandparent → root becomes actionable
-    result = handleUpdate({
-      updates: [{ node_id: ids.gp, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
+    // Resolve child — parent auto-resolves
+    handleUpdate({
+      updates: [{ node_id: ids.child, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
     }, "agent");
-    expect(result.newly_actionable!.some((n) => n.summary === "Cascade")).toBe(true);
+
+    // Check parent has synthetic evidence
+    const ctx = handleContext({ node_id: ids.parent });
+    expect(ctx.node.resolved).toBe(true);
+    expect(ctx.node.evidence).toHaveLength(1);
+    expect(ctx.node.evidence[0].ref).toBe("Auto-resolved: all children completed");
+    expect(ctx.node.evidence[0].type).toBe("note");
+  });
+
+  it("does not auto-resolve parent with mix of resolved and unresolved children", () => {
+    const { root } = openProject("no-auto", "No auto", "agent") as any;
+
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Parent" },
+        { ref: "c1", parent_ref: "parent", summary: "Child 1" },
+        { ref: "c2", parent_ref: "parent", summary: "Child 2" },
+      ],
+    }, "agent");
+
+    const ids = Object.fromEntries(plan.created.map((c: any) => [c.ref, c.id]));
+
+    // Resolve only c1
+    const result = handleUpdate({
+      updates: [{ node_id: ids.c1, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
+    }, "agent");
+
+    // Parent should NOT be auto-resolved
+    expect(result.auto_resolved ?? []).toHaveLength(0);
+
+    const ctx = handleContext({ node_id: ids.parent });
+    expect(ctx.node.resolved).toBe(false);
   });
 
   it("multi-child parent waits for all children", () => {
@@ -516,10 +557,15 @@ describe("cascade resolution", () => {
     expect(actionable.nodes).toHaveLength(1);
     expect(actionable.nodes[0].summary).toBe("Child 3"); // parent still not actionable
 
-    // Resolve last child — parent becomes actionable
+    // Resolve last child — parent auto-resolves (and root cascades too)
     const result = handleUpdate({
       updates: [{ node_id: ids.c3, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
     }, "agent");
-    expect(result.newly_actionable!.some((n) => n.summary === "Parent")).toBe(true);
+    expect(result.auto_resolved!.some((n) => n.summary === "Parent")).toBe(true);
+
+    // Everything is resolved
+    const summary = handleOpen({ project: "multi-child" }, "agent") as any;
+    expect(summary.summary.resolved).toBe(5); // c1 + c2 + c3 + parent + root
+    expect(summary.summary.actionable).toBe(0);
   });
 });

@@ -1,4 +1,4 @@
-import { updateNode } from "../nodes.js";
+import { updateNode, getNode, getChildren } from "../nodes.js";
 import { findNewlyActionable } from "../edges.js";
 import { requireArray, requireString } from "../validate.js";
 
@@ -21,6 +21,7 @@ export interface UpdateInput {
 export interface UpdateResult {
   updated: Array<{ node_id: string; rev: number }>;
   newly_actionable?: Array<{ id: string; summary: string }>;
+  auto_resolved?: Array<{ node_id: string; summary: string }>;
 }
 
 export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
@@ -62,10 +63,49 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
     }
   }
 
+  // [sl:GBuFbmTFuFfnl5KWW-ja-] Auto-resolve parents when all children are resolved
+  const autoResolved: Array<{ node_id: string; summary: string }> = [];
+  if (resolvedIds.length > 0) {
+    const seen = new Set<string>(resolvedIds);
+    const queue = [...resolvedIds];
+
+    while (queue.length > 0) {
+      const nodeId = queue.shift()!;
+      const node = getNode(nodeId);
+      if (!node?.parent) continue;
+
+      const parentId = node.parent;
+      if (seen.has(parentId)) continue;
+      seen.add(parentId);
+
+      const parent = getNode(parentId);
+      if (!parent || parent.resolved) continue;
+
+      const children = getChildren(parentId);
+      if (children.length === 0) continue;
+      if (children.every((c) => c.resolved)) {
+        const resolved = updateNode({
+          node_id: parentId,
+          agent,
+          resolved: true,
+          add_evidence: [{ type: "note", ref: "Auto-resolved: all children completed" }],
+        });
+        updated.push({ node_id: resolved.id, rev: resolved.rev });
+        resolvedIds.push(parentId);
+        autoResolved.push({ node_id: parentId, summary: parent.summary });
+        queue.push(parentId);
+      }
+    }
+  }
+
   const result: UpdateResult = { updated };
 
   if (resolvedIds.length > 0 && project) {
     result.newly_actionable = findNewlyActionable(project, resolvedIds);
+  }
+
+  if (autoResolved.length > 0) {
+    result.auto_resolved = autoResolved;
   }
 
   return result;

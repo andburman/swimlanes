@@ -48,6 +48,13 @@ export interface OnboardResult {
     content: string;
     updated_at: string;
   }>;
+  recently_resolved: Array<{
+    id: string;
+    summary: string;
+    resolved_at: string;
+    agent: string;
+  }>;
+  last_activity: string | null;
   actionable: Array<{
     id: string;
     summary: string;
@@ -170,12 +177,41 @@ export function handleOnboard(input: OnboardInput): OnboardResult {
     properties: JSON.parse(row.properties),
   }));
 
+  // 7. Recently resolved nodes (last 24h) — cross-session continuity
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const recentlyResolvedRows = db
+    .prepare(
+      `SELECT id, summary, updated_at,
+       (SELECT json_extract(value, '$.agent') FROM json_each(evidence) ORDER BY json_extract(value, '$.timestamp') DESC LIMIT 1) as last_agent
+       FROM nodes
+       WHERE project = ? AND resolved = 1 AND updated_at > ?
+       ORDER BY updated_at DESC
+       LIMIT 10`
+    )
+    .all(project, oneDayAgo) as Array<{ id: string; summary: string; updated_at: string; last_agent: string | null }>;
+
+  const recently_resolved = recentlyResolvedRows.map((row) => ({
+    id: row.id,
+    summary: row.summary,
+    resolved_at: row.updated_at,
+    agent: row.last_agent ?? "unknown",
+  }));
+
+  // 8. Last activity timestamp
+  const lastActivityRow = db
+    .prepare("SELECT MAX(updated_at) as last FROM nodes WHERE project = ?")
+    .get(project) as { last: string | null };
+  const last_activity = lastActivityRow.last;
+
   // Build hint based on project state
   let hint: string | undefined;
   if (root.discovery === "pending") {
     hint = `Discovery is pending. Interview the user to understand scope and goals, write knowledge entries with findings, then set discovery to "done" via graph_update before decomposing with graph_plan.`;
   } else if (actionable.length > 0) {
-    hint = `${actionable.length} actionable task(s) ready. Use graph_next({ project: "${project}", claim: true }) to claim one.`;
+    const recentNote = recently_resolved.length > 0
+      ? ` ${recently_resolved.length} task(s) resolved recently.`
+      : "";
+    hint = `${actionable.length} actionable task(s) ready.${recentNote} Use graph_next({ project: "${project}", claim: true }) to claim one.`;
   } else if (summary.unresolved > 0 && summary.actionable === 0) {
     hint = `All remaining tasks are blocked. Check dependencies with graph_query.`;
   } else if (summary.total <= 1 && root.discovery !== "pending") {
@@ -192,6 +228,8 @@ export function handleOnboard(input: OnboardInput): OnboardResult {
     recent_evidence,
     context_links,
     knowledge: knowledgeRows,
+    recently_resolved,
+    last_activity,
     actionable,
   };
 }

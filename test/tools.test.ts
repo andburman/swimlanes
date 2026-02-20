@@ -622,6 +622,28 @@ describe("graph_onboard", () => {
     expect(result.hint).toContain("graph_next");
   });
 
+  it("shows recently resolved tasks and last_activity for returning agents", () => {
+    const { root } = openProject("returning", "Returning project", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "done", parent_ref: root.id, summary: "Completed task" },
+        { ref: "todo", parent_ref: root.id, summary: "Pending task" },
+      ],
+    }, AGENT);
+
+    const doneId = plan.created.find((c: any) => c.ref === "done")!.id;
+    handleUpdate({
+      updates: [{ node_id: doneId, resolved: true, add_evidence: [{ type: "note", ref: "finished" }] }],
+    }, AGENT);
+
+    const result = handleOnboard({ project: "returning" });
+    expect(result.recently_resolved.length).toBeGreaterThanOrEqual(1);
+    expect(result.recently_resolved[0].summary).toBe("Completed task");
+    expect(result.recently_resolved[0].agent).toBe(AGENT);
+    expect(result.last_activity).toBeDefined();
+    expect(result.hint).toContain("resolved recently");
+  });
+
   it("respects evidence_limit", () => {
     const { root } = openProject("test", "Goal", AGENT) as any;
     const plan = handlePlan(

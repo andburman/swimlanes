@@ -80,6 +80,79 @@ describe("graph_plan", () => {
   });
 });
 
+describe("discovery enforcement", () => {
+  it("graph_open sets discovery:pending on new project roots", () => {
+    const { root } = handleOpen({ project: "disc", goal: "Test discovery" }, AGENT) as any;
+    const ctx = handleContext({ node_id: root.id });
+    expect(ctx.node.discovery).toBe("pending");
+  });
+
+  it("graph_plan rejects children when parent has discovery:pending", () => {
+    const { root } = handleOpen({ project: "disc", goal: "Test" }, AGENT) as any;
+    // root has discovery:pending — graph_plan should refuse
+    expect(() =>
+      handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Task A" }] }, AGENT)
+    ).toThrow(EngineError);
+    expect(() =>
+      handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Task A" }] }, AGENT)
+    ).toThrow(/discovery.*pending/i);
+  });
+
+  it("graph_plan allows children when parent has discovery:done", () => {
+    const { root } = handleOpen({ project: "disc", goal: "Test" }, AGENT) as any;
+    updateNode({ node_id: root.id, agent: AGENT, discovery: "done" });
+
+    const result = handlePlan(
+      { nodes: [{ ref: "a", parent_ref: root.id, summary: "Task A" }] },
+      AGENT
+    );
+    expect(result.created).toHaveLength(1);
+  });
+
+  it("graph_plan allows children when parent has discovery:null (legacy nodes)", () => {
+    const { root } = handleOpen({ project: "disc", goal: "Test" }, AGENT) as any;
+    // Set discovery to null to simulate a legacy node
+    updateNode({ node_id: root.id, agent: AGENT, discovery: null as any });
+
+    const result = handlePlan(
+      { nodes: [{ ref: "a", parent_ref: root.id, summary: "Task A" }] },
+      AGENT
+    );
+    expect(result.created).toHaveLength(1);
+  });
+
+  it("graph_update flips discovery from pending to done", () => {
+    const { root } = handleOpen({ project: "disc", goal: "Test" }, AGENT) as any;
+
+    // Verify pending
+    let ctx = handleContext({ node_id: root.id });
+    expect(ctx.node.discovery).toBe("pending");
+
+    // Flip to done
+    handleUpdate(
+      { updates: [{ node_id: root.id, discovery: "done" }] },
+      AGENT
+    );
+
+    ctx = handleContext({ node_id: root.id });
+    expect(ctx.node.discovery).toBe("done");
+  });
+
+  it("discovery change appears in audit history", () => {
+    const { root } = handleOpen({ project: "disc", goal: "Test" }, AGENT) as any;
+    handleUpdate(
+      { updates: [{ node_id: root.id, discovery: "done" }] },
+      AGENT
+    );
+
+    const history = handleHistory({ node_id: root.id });
+    const discoveryEvent = history.events.find((e: any) =>
+      e.changes && JSON.stringify(e.changes).includes("discovery")
+    );
+    expect(discoveryEvent).toBeDefined();
+  });
+});
+
 describe("graph_next", () => {
   it("returns highest priority actionable node", () => {
     const { root } = openProject("test", "test", AGENT) as any;
@@ -493,6 +566,27 @@ describe("graph_onboard", () => {
 
   it("throws for nonexistent project", () => {
     expect(() => handleOnboard({ project: "nope" })).toThrow(EngineError);
+  });
+
+  it("includes knowledge entries", () => {
+    openProject("test", "Build app", AGENT);
+
+    // Write some knowledge
+    handleKnowledgeWrite({ project: "test", key: "architecture", content: "Monorepo with pnpm workspaces" }, AGENT);
+    handleKnowledgeWrite({ project: "test", key: "conventions", content: "Use kebab-case for file names" }, AGENT);
+
+    const result = handleOnboard({ project: "test" });
+    expect(result.knowledge).toHaveLength(2);
+    expect(result.knowledge.map((k) => k.key).sort()).toEqual(["architecture", "conventions"]);
+    expect(result.knowledge[0].content).toBeDefined();
+    expect(result.knowledge[0].updated_at).toBeDefined();
+  });
+
+  it("returns empty knowledge array when none exist", () => {
+    openProject("test", "Build app", AGENT);
+
+    const result = handleOnboard({ project: "test" });
+    expect(result.knowledge).toEqual([]);
   });
 
   it("respects evidence_limit", () => {

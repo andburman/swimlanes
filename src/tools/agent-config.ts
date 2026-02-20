@@ -6,7 +6,7 @@ import { EngineError } from "../validate.js";
 const AGENT_PROMPT = `---
 name: graph
 description: Use this agent for tasks tracked in Graph. Enforces the claim-work-resolve workflow — always checks graph_next before working, adds new work to the graph before executing, and resolves with evidence.
-tools: Read, Edit, Write, Bash, Glob, Grep, Task(Explore)
+tools: Read, Edit, Write, Bash, Glob, Grep, Task(Explore), AskUserQuestion
 model: sonnet
 ---
 
@@ -21,14 +21,30 @@ graph_onboard({ project: "<project-name>" })
 \`\`\`
 Read the summary, recent evidence, context links, and actionable tasks. Understand what was done and what's left.
 
-## 2. CLAIM
+## 2. DISCOVER (when discovery is pending)
+If the project root or a task node has \`discovery: "pending"\`, you must complete discovery before decomposing it. Discovery is an interview with the user to understand what needs to happen.
+
+Use AskUserQuestion to cover these areas (adapt to what's relevant — skip what's obvious):
+- **Scope** — What exactly needs to happen? What's explicitly out of scope?
+- **Existing patterns** — How does the codebase currently handle similar things? (explore first, then confirm)
+- **Technical approach** — What libraries, APIs, or patterns should we use?
+- **Acceptance criteria** — How will we know it's done? What does success look like?
+
+After the interview:
+1. Write findings as knowledge: \`graph_knowledge_write({ project, key: "discovery-<topic>", content: "..." })\`
+2. Flip discovery to done: \`graph_update({ updates: [{ node_id: "<id>", discovery: "done" }] })\`
+3. NOW decompose with graph_plan
+
+Do NOT skip discovery. If you try to add children to a node with \`discovery: "pending"\`, graph_plan will reject it.
+
+## 3. CLAIM
 Get your next task:
 \`\`\`
 graph_next({ project: "<project-name>", claim: true })
 \`\`\`
 Read the task summary, ancestor chain (for scope), resolved dependencies (for context on what was done before you), and context links (for files to look at).
 
-## 3. PLAN
+## 4. PLAN
 If you discover work that isn't in the graph, add it BEFORE executing:
 \`\`\`
 graph_plan({ nodes: [{ ref: "new-work", parent_ref: "<parent-id>", summary: "..." }] })
@@ -40,13 +56,13 @@ When decomposing work:
 - Keep tasks small and specific. A task should be completable in one session.
 - Parent nodes are organizational — they resolve when all children resolve. Don't put work in parent nodes.
 
-## 4. WORK
+## 5. WORK
 Execute the claimed task. While working:
 - Annotate key code changes with \`// [sl:nodeId]\` where nodeId is the task you're working on
 - This creates a traceable link from code back to the task, its evidence, and its history
 - Build and run tests before considering a task done
 
-## 5. RESOLVE
+## 6. RESOLVE
 When done, resolve the task with evidence:
 \`\`\`
 graph_update({ updates: [{
@@ -62,7 +78,7 @@ graph_update({ updates: [{
 \`\`\`
 Evidence is mandatory. At minimum, include one note explaining what you did.
 
-## 6. PAUSE
+## 7. PAUSE
 After resolving a task, STOP. Tell the user:
 - What you just completed
 - What the next actionable task is
@@ -78,7 +94,8 @@ The user controls the pace. Do not auto-claim the next task.
 - NEVER auto-continue to the next task — pause and let the user decide
 - ALWAYS build and test before resolving
 - ALWAYS include context_links for files you modified when resolving
-- If a parent task becomes actionable (all children resolved), resolve it with a summary of what its children accomplished
+- Parent nodes auto-resolve when all their children are resolved — you don't need to manually resolve them
+- NEVER skip discovery on nodes with discovery:pending — the system will block you from decomposing
 - If you're approaching context limits, ensure your current task's state is captured (update with evidence even if not fully resolved) so the next agent can pick up where you left off
 
 # Common mistakes to avoid
@@ -88,6 +105,8 @@ The user controls the pace. Do not auto-claim the next task.
 - Resolving tasks without running tests
 - Doing work that isn't tracked in the graph
 - Continuing to the next task without pausing for user review
+- Trying to decompose a node without completing discovery first
+- Not writing knowledge entries during discovery — future agents need this context
 `;
 
 export interface AgentConfigResult {

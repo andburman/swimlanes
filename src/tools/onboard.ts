@@ -40,6 +40,11 @@ export interface OnboardResult {
     timestamp: string;
   }>;
   context_links: string[];
+  knowledge: Array<{
+    key: string;
+    content: string;
+    updated_at: string;
+  }>;
   actionable: Array<{
     id: string;
     summary: string;
@@ -130,7 +135,12 @@ export function handleOnboard(input: OnboardInput): OnboardResult {
   }
   const context_links = [...linkSet].sort();
 
-  // 5. Actionable tasks preview (like graph_next without claiming)
+  // 5. Knowledge entries
+  const knowledgeRows = db
+    .prepare("SELECT key, content, updated_at FROM knowledge WHERE project = ? ORDER BY updated_at DESC")
+    .all(project) as Array<{ key: string; content: string; updated_at: string }>;
+
+  // 6. Actionable tasks preview (like graph_next without claiming)
   const actionableRows = db
     .prepare(
       `SELECT n.id, n.summary, n.properties FROM nodes n
@@ -163,6 +173,7 @@ export function handleOnboard(input: OnboardInput): OnboardResult {
     tree,
     recent_evidence,
     context_links,
+    knowledge: knowledgeRows,
     actionable,
   };
 }

@@ -62,6 +62,19 @@ export function capEvidenceLimit(tier: Tier, requested?: number): number {
 }
 
 /**
+ * Check if knowledge tools are allowed on the current tier.
+ * Throws EngineError on free tier.
+ */
+export function checkKnowledgeTier(tier: Tier): void {
+  if (tier === "pro") return;
+
+  throw new EngineError(
+    "free_tier_limit",
+    "Knowledge tools are a pro feature. Activate a license key to use graph_knowledge_write, graph_knowledge_read, graph_knowledge_search, and graph_knowledge_delete."
+  );
+}
+
+/**
  * Check if scope parameter is allowed on free tier.
  * Returns undefined (stripped) if not allowed.
  */

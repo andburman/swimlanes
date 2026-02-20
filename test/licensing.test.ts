@@ -7,6 +7,7 @@ import {
   checkProjectLimit,
   capEvidenceLimit,
   checkScope,
+  checkKnowledgeTier,
 } from "../src/gates.js";
 import { handleOpen } from "../src/tools/open.js";
 import { handlePlan } from "../src/tools/plan.js";
@@ -184,6 +185,17 @@ describe("feature gates", () => {
     });
   });
 
+  describe("checkKnowledgeTier", () => {
+    it("blocks on free tier", () => {
+      expect(() => checkKnowledgeTier("free")).toThrow(EngineError);
+      expect(() => checkKnowledgeTier("free")).toThrow(/pro feature/);
+    });
+
+    it("allows on pro tier", () => {
+      expect(() => checkKnowledgeTier("pro")).not.toThrow();
+    });
+  });
+
   describe("checkScope", () => {
     it("strips scope on free tier", () => {
       expect(checkScope("free", "some-node-id")).toBeUndefined();
@@ -210,5 +222,6 @@ describe("degradation", () => {
     expect(() => checkProjectLimit("free")).toThrow(/limited to 1 project/);
     expect(capEvidenceLimit("free", 50)).toBe(5);
     expect(checkScope("free", "node-id")).toBeUndefined();
+    expect(() => checkKnowledgeTier("free")).toThrow(/pro feature/);
   });
 });

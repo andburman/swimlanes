@@ -19,7 +19,7 @@ import { handleOnboard } from "./tools/onboard.js";
 import { handleAgentConfig } from "./tools/agent-config.js";
 import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch } from "./tools/knowledge.js";
 import { getLicenseTier, type Tier } from "./license.js";
-import { checkNodeLimit, checkProjectLimit, capEvidenceLimit, checkScope } from "./gates.js";
+import { checkNodeLimit, checkProjectLimit, capEvidenceLimit, checkScope, checkKnowledgeTier } from "./gates.js";
 
 import { createHash } from "crypto";
 import { mkdirSync, readFileSync } from "fs";
@@ -529,18 +529,22 @@ export async function startServer(): Promise<void> {
           break;
 
         case "graph_knowledge_write":
+          checkKnowledgeTier(tier);
           result = handleKnowledgeWrite(args as any, AGENT_IDENTITY);
           break;
 
         case "graph_knowledge_read":
+          checkKnowledgeTier(tier);
           result = handleKnowledgeRead(args as any);
           break;
 
         case "graph_knowledge_delete":
+          checkKnowledgeTier(tier);
           result = handleKnowledgeDelete(args as any);
           break;
 
         case "graph_knowledge_search":
+          checkKnowledgeTier(tier);
           result = handleKnowledgeSearch(args as any);
           break;
 

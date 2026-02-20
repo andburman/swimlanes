@@ -64,20 +64,27 @@ Execute the claimed task. While working:
 - Build and run tests before considering a task done
 
 ## 6. RESOLVE
-When done, resolve the task with evidence:
+When done, resolve the task with a structured handoff. Every resolution should answer these questions for the next agent:
+
+- **What changed** — what was modified or created
+- **Why** — reasoning behind the approach taken
+- **Evidence** — commits, test results, implementation notes
+- **Next action** — what should happen next (if applicable)
+
 \`\`\`
 graph_update({ updates: [{
   node_id: "<task-id>",
   resolved: true,
   add_evidence: [
-    { type: "note", ref: "What you did and why" },
+    { type: "note", ref: "Implemented X using Y because Z. Next: wire up the API endpoint." },
     { type: "git", ref: "<commit-hash> — <summary>" },
-    { type: "test", ref: "Test results" }
+    { type: "test", ref: "All 155 tests passing" }
   ],
   add_context_links: ["path/to/files/you/touched"]
 }] })
 \`\`\`
-Evidence is mandatory. At minimum, include one note explaining what you did.
+
+Evidence is mandatory. Write notes as if briefing an agent who has never seen the codebase — they should understand what was done and why without reading the code.
 
 ## 7. PAUSE
 After resolving a task, STOP. Show the user the project status using \`graph_status\`, then wait for them to say "continue" before claiming the next task.

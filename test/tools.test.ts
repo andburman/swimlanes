@@ -620,19 +620,11 @@ describe("graph_onboard", () => {
 });
 
 describe("graph_agent_config", () => {
-  it("throws on free tier (no license key)", () => {
-    expect(() => handleAgentConfig()).toThrow(EngineError);
-    expect(() => handleAgentConfig()).toThrow(/pro feature/);
-  });
-
-  it("returns valid agent file content when allowed", () => {
-    // We can't easily test pro tier without a real key, but we can verify
-    // the error message is correct for free tier
-    try {
-      handleAgentConfig();
-    } catch (e: any) {
-      expect(e.code).toBe("free_tier_limit");
-    }
+  it("returns agent file content for all tiers (free retention hook)", () => {
+    const result = handleAgentConfig();
+    expect(result.agent_file).toContain("graph-optimized agent");
+    expect(result.install_path).toBe(".claude/agents/graph.md");
+    expect(result.instructions).toContain("Save the agent_file");
   });
 });
 

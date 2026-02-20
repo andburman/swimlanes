@@ -125,103 +125,30 @@ describe("license key verification", () => {
   });
 });
 
-describe("feature gates", () => {
-  describe("checkProjectLimit", () => {
-    it("allows first project on free tier", () => {
-      expect(() => checkProjectLimit("free")).not.toThrow();
-    });
+describe("feature gates (acquisition phase — all free)", () => {
+  // All gates are relaxed during acquisition phase.
+  // Free tier has same limits as pro to maximize adoption.
 
-    it("blocks second project on free tier", () => {
-      handleOpen({ project: "first", goal: "First project" }, AGENT);
-      expect(() => checkProjectLimit("free")).toThrow(EngineError);
-      expect(() => checkProjectLimit("free")).toThrow(/limited to 1 project/);
-    });
-
-    it("allows unlimited projects on pro tier", () => {
-      handleOpen({ project: "first", goal: "First project" }, AGENT);
-      expect(() => checkProjectLimit("pro")).not.toThrow();
-    });
+  it("allows unlimited projects on free tier", () => {
+    handleOpen({ project: "first", goal: "First project" }, AGENT);
+    expect(() => checkProjectLimit("free")).not.toThrow();
   });
 
-  describe("checkNodeLimit", () => {
-    it("allows nodes under limit on free tier", () => {
-      handleOpen({ project: "test", goal: "Test" }, AGENT);
-      expect(() => checkNodeLimit("free", "test", 10)).not.toThrow();
-    });
-
-    it("blocks nodes over 50 on free tier", () => {
-      const { root } = handleOpen({ project: "test", goal: "Test" }, AGENT) as any;
-      updateNode({ node_id: root.id, agent: AGENT, discovery: "done" });
-      // Create 49 more nodes (root is 1), reaching 50
-      const nodes = Array.from({ length: 49 }, (_, i) => ({
-        ref: `n${i}`,
-        parent_ref: root.id,
-        summary: `Node ${i}`,
-      }));
-      handlePlan({ nodes }, AGENT);
-
-      // 50 nodes exist, trying to add 1 more should fail
-      expect(() => checkNodeLimit("free", "test", 1)).toThrow(EngineError);
-      expect(() => checkNodeLimit("free", "test", 1)).toThrow(/limited to 50 nodes/);
-    });
-
-    it("allows unlimited nodes on pro tier", () => {
-      handleOpen({ project: "test", goal: "Test" }, AGENT);
-      expect(() => checkNodeLimit("pro", "test", 1000)).not.toThrow();
-    });
+  it("allows unlimited nodes on free tier", () => {
+    handleOpen({ project: "test", goal: "Test" }, AGENT);
+    expect(() => checkNodeLimit("free", "test", 1000)).not.toThrow();
   });
 
-  describe("capEvidenceLimit", () => {
-    it("caps at 5 on free tier", () => {
-      expect(capEvidenceLimit("free")).toBe(5);
-      expect(capEvidenceLimit("free", 20)).toBe(5);
-      expect(capEvidenceLimit("free", 3)).toBe(3);
-    });
-
-    it("allows up to 50 on pro tier", () => {
-      expect(capEvidenceLimit("pro")).toBe(20); // default
-      expect(capEvidenceLimit("pro", 50)).toBe(50);
-      expect(capEvidenceLimit("pro", 100)).toBe(50); // capped at 50
-    });
+  it("evidence limit matches pro tier on free", () => {
+    expect(capEvidenceLimit("free")).toBe(50);
+    expect(capEvidenceLimit("free", 50)).toBe(50);
   });
 
-  describe("checkKnowledgeTier", () => {
-    it("blocks on free tier", () => {
-      expect(() => checkKnowledgeTier("free")).toThrow(EngineError);
-      expect(() => checkKnowledgeTier("free")).toThrow(/pro feature/);
-    });
-
-    it("allows on pro tier", () => {
-      expect(() => checkKnowledgeTier("pro")).not.toThrow();
-    });
+  it("knowledge tools allowed on free tier", () => {
+    expect(() => checkKnowledgeTier("free")).not.toThrow();
   });
 
-  describe("checkScope", () => {
-    it("strips scope on free tier", () => {
-      expect(checkScope("free", "some-node-id")).toBeUndefined();
-    });
-
-    it("preserves scope on pro tier", () => {
-      expect(checkScope("pro", "some-node-id")).toBe("some-node-id");
-    });
-
-    it("handles undefined scope", () => {
-      expect(checkScope("free")).toBeUndefined();
-      expect(checkScope("pro")).toBeUndefined();
-    });
-  });
-});
-
-describe("degradation", () => {
-  it("expired key degrades to free tier limits", () => {
-    // When getLicenseTier returns "free" (expired key), all gates enforce free limits
-    // This is tested implicitly: gates take tier as a parameter
-    // An expired key → verifyLicenseKey returns null → getLicenseTier returns "free"
-    // Then all gate functions receive "free" and enforce limits
-    handleOpen({ project: "first", goal: "Project" }, AGENT);
-    expect(() => checkProjectLimit("free")).toThrow(/limited to 1 project/);
-    expect(capEvidenceLimit("free", 50)).toBe(5);
-    expect(checkScope("free", "node-id")).toBeUndefined();
-    expect(() => checkKnowledgeTier("free")).toThrow(/pro feature/);
+  it("scope allowed on free tier", () => {
+    expect(checkScope("free", "some-node-id")).toBe("some-node-id");
   });
 });

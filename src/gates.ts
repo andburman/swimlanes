@@ -4,11 +4,12 @@ import type { Tier } from "./license.js";
 
 // [sl:N0IDVJQIhENQFsov6-Lhg] Feature gates — enforce free vs pro limits
 
+// Limits relaxed — everything free while building user base (Phase 1: Acquisition)
 const FREE_LIMITS = {
-  maxProjects: 1,
-  maxNodesPerProject: 50,
-  onboardEvidenceLimit: 5,
-  scopeEnabled: false,
+  maxProjects: Infinity,
+  maxNodesPerProject: Infinity,
+  onboardEvidenceLimit: 50,
+  scopeEnabled: true,
 };
 
 /**
@@ -63,22 +64,17 @@ export function capEvidenceLimit(tier: Tier, requested?: number): number {
 
 /**
  * Check if knowledge tools are allowed on the current tier.
- * Throws EngineError on free tier.
+ * Currently free for all — everything ungated during acquisition phase.
  */
-export function checkKnowledgeTier(tier: Tier): void {
-  if (tier === "pro") return;
-
-  throw new EngineError(
-    "free_tier_limit",
-    "Knowledge tools are a pro feature. Activate a license key to use graph_knowledge_write, graph_knowledge_read, graph_knowledge_search, and graph_knowledge_delete."
-  );
+export function checkKnowledgeTier(_tier: Tier): void {
+  // All tiers allowed during acquisition phase
+  return;
 }
 
 /**
- * Check if scope parameter is allowed on free tier.
- * Returns undefined (stripped) if not allowed.
+ * Check if scope parameter is allowed.
+ * Currently free for all during acquisition phase.
  */
-export function checkScope(tier: Tier, scope?: string): string | undefined {
-  if (tier === "pro") return scope;
-  return undefined; // silently ignore scope on free tier
+export function checkScope(_tier: Tier, scope?: string): string | undefined {
+  return scope;
 }

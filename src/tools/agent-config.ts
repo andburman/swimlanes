@@ -1,7 +1,4 @@
-import { getLicenseTier } from "../license.js";
-import { EngineError } from "../validate.js";
-
-// [sl:fV9I7Vel3xT5d_Ws2YHul] Subagent delivery — pro tier returns agent config
+// [sl:fV9I7Vel3xT5d_Ws2YHul] Subagent delivery — free for all (retention hook)
 
 const AGENT_PROMPT = `---
 name: graph
@@ -115,16 +112,7 @@ export interface AgentConfigResult {
   instructions: string;
 }
 
-export function handleAgentConfig(dbPath?: string): AgentConfigResult {
-  const tier = getLicenseTier(dbPath);
-
-  if (tier !== "pro") {
-    throw new EngineError(
-      "free_tier_limit",
-      "The graph-optimized agent configuration is a pro feature. Activate a license key to unlock it."
-    );
-  }
-
+export function handleAgentConfig(): AgentConfigResult {
   return {
     agent_file: AGENT_PROMPT,
     install_path: ".claude/agents/graph.md",

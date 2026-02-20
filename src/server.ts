@@ -362,7 +362,7 @@ const TOOLS = [
   {
     name: "graph_agent_config",
     description:
-      "Returns the graph-optimized agent configuration file for Claude Code. Pro tier only. Save the returned content to .claude/agents/graph.md to enable the graph workflow agent.",
+      "Returns the graph-optimized agent configuration file for Claude Code. Save the returned content to .claude/agents/graph.md to enable the graph workflow agent.",
     inputSchema: {
       type: "object" as const,
       properties: {},
@@ -525,7 +525,7 @@ export async function startServer(): Promise<void> {
         }
 
         case "graph_agent_config":
-          result = handleAgentConfig(DB_PATH);
+          result = handleAgentConfig();
           break;
 
         case "graph_knowledge_write":

@@ -3,3 +3,4 @@ dist/
 *.db
 *.db-wal
 *.db-shm
+npm_recovery_codes.txt

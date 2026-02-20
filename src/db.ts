@@ -73,6 +73,19 @@ function migrate(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_node);
     CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(from_node, type);
     CREATE INDEX IF NOT EXISTS idx_events_node ON events(node_id);
+
+    CREATE TABLE IF NOT EXISTS knowledge (
+      id TEXT PRIMARY KEY,
+      project TEXT NOT NULL,
+      key TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(project, key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge(project);
   `);
 
   // [sl:yBBVr4wcgVfWA_w8U8hQo] Migration: add depth column if it doesn't exist

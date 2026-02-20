@@ -11,6 +11,7 @@ import { handleRestructure } from "../src/tools/restructure.js";
 import { handleHistory } from "../src/tools/history.js";
 import { handleOnboard } from "../src/tools/onboard.js";
 import { handleAgentConfig } from "../src/tools/agent-config.js";
+import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch } from "../src/tools/knowledge.js";
 import { ValidationError, EngineError } from "../src/validate.js";
 
 const AGENT = "test-agent";
@@ -587,5 +588,91 @@ describe("full workflow", () => {
     const summary = handleOpen({ project: "workflow" }, AGENT) as any;
     expect(summary.summary.resolved).toBe(2);
     expect(summary.summary.actionable).toBe(1);
+  });
+});
+
+describe("graph_knowledge", () => {
+  it("writes and reads a knowledge entry", () => {
+    handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
+
+    const writeResult = handleKnowledgeWrite(
+      { project: "kb-test", key: "arch", content: "Monorepo with turborepo" },
+      AGENT
+    );
+    expect(writeResult.action).toBe("created");
+
+    const readResult = handleKnowledgeRead({ project: "kb-test", key: "arch" }) as any;
+    expect(readResult.key).toBe("arch");
+    expect(readResult.content).toBe("Monorepo with turborepo");
+  });
+
+  it("overwrites existing key", () => {
+    handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
+
+    handleKnowledgeWrite({ project: "kb-test", key: "db", content: "PostgreSQL" }, AGENT);
+    const update = handleKnowledgeWrite({ project: "kb-test", key: "db", content: "SQLite" }, AGENT);
+    expect(update.action).toBe("updated");
+
+    const read = handleKnowledgeRead({ project: "kb-test", key: "db" }) as any;
+    expect(read.content).toBe("SQLite");
+  });
+
+  it("lists all entries when key omitted", () => {
+    handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
+
+    handleKnowledgeWrite({ project: "kb-test", key: "arch", content: "Monorepo" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-test", key: "conventions", content: "Use kebab-case" }, AGENT);
+
+    const list = handleKnowledgeRead({ project: "kb-test" }) as any;
+    expect(list.entries).toHaveLength(2);
+  });
+
+  it("searches by substring", () => {
+    handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
+
+    handleKnowledgeWrite({ project: "kb-test", key: "auth", content: "JWT with refresh tokens" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-test", key: "db", content: "PostgreSQL with prisma" }, AGENT);
+
+    const results = handleKnowledgeSearch({ project: "kb-test", query: "JWT" }) as any;
+    expect(results.entries).toHaveLength(1);
+    expect(results.entries[0].key).toBe("auth");
+  });
+
+  it("throws for non-existent project", () => {
+    expect(() => handleKnowledgeWrite({ project: "nope", key: "k", content: "v" }, AGENT))
+      .toThrow("not found");
+  });
+
+  it("throws for non-existent key", () => {
+    handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
+    expect(() => handleKnowledgeRead({ project: "kb-test", key: "missing" }))
+      .toThrow("not found");
+  });
+
+  it("preserves created_by on overwrite", () => {
+    handleOpen({ project: "kb-test", goal: "Test knowledge" }, "agent-a");
+    handleKnowledgeWrite({ project: "kb-test", key: "arch", content: "v1" }, "agent-a");
+    handleKnowledgeWrite({ project: "kb-test", key: "arch", content: "v2" }, "agent-b");
+
+    const read = handleKnowledgeRead({ project: "kb-test", key: "arch" }) as any;
+    expect(read.content).toBe("v2");
+    expect(read.created_by).toBe("agent-a");
+  });
+
+  it("deletes an entry", () => {
+    handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-test", key: "temp", content: "data" }, AGENT);
+
+    const del = handleKnowledgeDelete({ project: "kb-test", key: "temp" });
+    expect(del.action).toBe("deleted");
+
+    expect(() => handleKnowledgeRead({ project: "kb-test", key: "temp" }))
+      .toThrow("not found");
+  });
+
+  it("throws when deleting non-existent key", () => {
+    handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
+    expect(() => handleKnowledgeDelete({ project: "kb-test", key: "nope" }))
+      .toThrow("not found");
   });
 });

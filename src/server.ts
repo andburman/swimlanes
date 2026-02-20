@@ -17,6 +17,7 @@ import { handleRestructure } from "./tools/restructure.js";
 import { handleHistory } from "./tools/history.js";
 import { handleOnboard } from "./tools/onboard.js";
 import { handleAgentConfig } from "./tools/agent-config.js";
+import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch } from "./tools/knowledge.js";
 import { getLicenseTier, type Tier } from "./license.js";
 import { checkNodeLimit, checkProjectLimit, capEvidenceLimit, checkScope } from "./gates.js";
 
@@ -339,6 +340,59 @@ const TOOLS = [
       properties: {},
     },
   },
+  {
+    name: "graph_knowledge_write",
+    description:
+      "Write a knowledge entry for a project. Creates or overwrites a named document. Use for persistent project-level knowledge (architecture decisions, conventions, API contracts) that outlives individual tasks.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project: { type: "string", description: "Project name" },
+        key: { type: "string", description: "Knowledge entry key (e.g. 'auth', 'database-schema', 'api-contracts')" },
+        content: { type: "string", description: "Free-form text content" },
+      },
+      required: ["project", "key", "content"],
+    },
+  },
+  {
+    name: "graph_knowledge_read",
+    description:
+      "Read knowledge entries for a project. Provide a key to read one entry, or omit to list all entries.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project: { type: "string", description: "Project name" },
+        key: { type: "string", description: "Knowledge entry key. Omit to list all." },
+      },
+      required: ["project"],
+    },
+  },
+  {
+    name: "graph_knowledge_delete",
+    description:
+      "Delete a knowledge entry from a project.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project: { type: "string", description: "Project name" },
+        key: { type: "string", description: "Knowledge entry key to delete" },
+      },
+      required: ["project", "key"],
+    },
+  },
+  {
+    name: "graph_knowledge_search",
+    description:
+      "Search knowledge entries by substring match on key or content.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project: { type: "string", description: "Project name" },
+        query: { type: "string", description: "Search string" },
+      },
+      required: ["project", "query"],
+    },
+  },
 ];
 
 export async function startServer(): Promise<void> {
@@ -441,6 +495,22 @@ export async function startServer(): Promise<void> {
 
         case "graph_agent_config":
           result = handleAgentConfig(DB_PATH);
+          break;
+
+        case "graph_knowledge_write":
+          result = handleKnowledgeWrite(args as any, AGENT_IDENTITY);
+          break;
+
+        case "graph_knowledge_read":
+          result = handleKnowledgeRead(args as any);
+          break;
+
+        case "graph_knowledge_delete":
+          result = handleKnowledgeDelete(args as any);
+          break;
+
+        case "graph_knowledge_search":
+          result = handleKnowledgeSearch(args as any);
           break;
 
         default:

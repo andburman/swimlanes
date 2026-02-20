@@ -16,6 +16,8 @@ import { handleStatus } from "../src/tools/status.js";
 import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch } from "../src/tools/knowledge.js";
 import { updateNode } from "../src/nodes.js";
 import { ValidationError, EngineError } from "../src/validate.js";
+import { computeContinuityConfidence } from "../src/continuity.js";
+import { getDb } from "../src/db.js";
 
 const AGENT = "test-agent";
 
@@ -1559,6 +1561,97 @@ describe("graph_status", () => {
     expect(result.projects).toHaveLength(2);
     expect(result.hint).toContain("stat-m1");
     expect(result.hint).toContain("stat-m2");
+  });
+});
+
+describe("continuity_confidence", () => {
+  it("returns high confidence for well-maintained project", () => {
+    const { root } = openProject("cc-high", "Test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "a", parent_ref: root.id, summary: "Task A" },
+        { ref: "b", parent_ref: root.id, summary: "Task B" },
+      ],
+    }, AGENT);
+
+    // Resolve both with evidence
+    handleUpdate({ updates: [{ node_id: plan.created[0].id, resolved: true, add_evidence: [{ type: "note", ref: "Done A" }] }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: plan.created[1].id, resolved: true, add_evidence: [{ type: "note", ref: "Done B" }] }] }, AGENT);
+
+    const cc = computeContinuityConfidence("cc-high");
+    expect(cc.confidence).toBe("high");
+    expect(cc.score).toBeGreaterThanOrEqual(70);
+    expect(cc.reasons).toHaveLength(0);
+  });
+
+  it("returns lower confidence when tasks resolved without evidence", () => {
+    const { root } = openProject("cc-low", "Test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "a", parent_ref: root.id, summary: "Task A" },
+        { ref: "b", parent_ref: root.id, summary: "Task B" },
+      ],
+    }, AGENT);
+
+    // Resolve one with evidence
+    handleUpdate({ updates: [{ node_id: plan.created[0].id, resolved: true, add_evidence: [{ type: "note", ref: "Done" }] }] }, AGENT);
+
+    // Force-resolve one without evidence (raw SQL to bypass all validation)
+    getDb().prepare("UPDATE nodes SET resolved = 1 WHERE id = ?").run(plan.created[1].id);
+
+    const cc = computeContinuityConfidence("cc-low");
+    // 1 of 2 has evidence — 50% coverage should deduct points
+    expect(cc.score).toBeLessThan(100);
+    expect(cc.reasons.some(r => r.includes("no evidence"))).toBe(true);
+  });
+
+  it("flags missing knowledge on mature projects", () => {
+    const { root } = openProject("cc-know", "Test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "a", parent_ref: root.id, summary: "Task 1" },
+        { ref: "b", parent_ref: root.id, summary: "Task 2" },
+        { ref: "c", parent_ref: root.id, summary: "Task 3" },
+        { ref: "d", parent_ref: root.id, summary: "Task 4" },
+        { ref: "e", parent_ref: root.id, summary: "Task 5" },
+      ],
+    }, AGENT);
+
+    // Resolve all with evidence
+    for (const c of plan.created) {
+      handleUpdate({ updates: [{ node_id: c.id, resolved: true, add_evidence: [{ type: "note", ref: "Done" }] }] }, AGENT);
+    }
+
+    const cc = computeContinuityConfidence("cc-know");
+    expect(cc.reasons.some(r => r.includes("knowledge"))).toBe(true);
+  });
+
+  it("shows in graph_onboard response", () => {
+    const { root } = openProject("cc-onboard", "Test", AGENT) as any;
+    handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Task" }] }, AGENT);
+
+    const result = handleOnboard({ project: "cc-onboard" }) as any;
+    expect(result.continuity_confidence).toBeDefined();
+    expect(result.continuity_confidence.confidence).toBeDefined();
+    expect(result.continuity_confidence.score).toBeGreaterThanOrEqual(0);
+    expect(result.continuity_confidence.reasons).toBeDefined();
+  });
+
+  it("shows in graph_status formatted output", () => {
+    const { root } = openProject("cc-status", "Test", AGENT) as any;
+    handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Task" }] }, AGENT);
+
+    const result = handleStatus({ project: "cc-status" }) as any;
+    expect(result.formatted).toContain("continuity confidence:");
+  });
+
+  it("returns high for empty project (no resolved tasks to judge)", () => {
+    const { root } = openProject("cc-empty", "Test", AGENT) as any;
+    handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Task" }] }, AGENT);
+
+    const cc = computeContinuityConfidence("cc-empty");
+    // No resolved tasks means no evidence penalty, only the "no tasks" penalty doesn't apply since we have one
+    expect(cc.confidence).toBe("high");
   });
 });
 

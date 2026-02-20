@@ -31,6 +31,11 @@ Read the \`hint\` field first — it tells you exactly what to do next. Then rea
 
 This catches work done ad-hoc or through plan files that bypassed the graph. It's cheap to run and prevents silent context loss.
 
+**Continuity confidence:** \`graph_onboard\` returns a \`continuity_confidence\` signal (\`high\`/\`medium\`/\`low\`) with a score and reasons. This tells you how reliable the inherited context is.
+- **high** (70-100): proceed normally
+- **medium** (40-69): surface reasons to the user, proceed with caution
+- **low** (0-39): STOP. Show the reasons. Ask the user to confirm before working. Low confidence means critical context may be missing.
+
 ## 2. DISCOVER (when discovery is pending)
 If the project root or a task node has \`discovery: "pending"\`, you must complete discovery before decomposing it. Discovery is an interview with the user to understand what needs to happen.
 

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { handleAgentConfig } from "./tools/agent-config.js";
@@ -67,7 +67,31 @@ export function init(): void {
     wrote = true;
   }
 
-  // 3. Summary
+  // 3. Append graph workflow instructions to CLAUDE.md
+  // [sl:qPxNQTKru6q3nPzsNWlfe] Ensure default agent follows graph workflow
+  const claudeMdPath = join(cwd, "CLAUDE.md");
+  const graphSection = `
+## Graph workflow
+
+This project uses Graph for task tracking across sessions. Start every session with \`graph_onboard\` to see project state, actionable tasks, and continuity confidence. Follow the claim-work-resolve loop: \`graph_next\` (claim) → do work → \`graph_update\` (resolve with evidence). Don't execute ad-hoc work — add it to the graph first via \`graph_plan\`.
+`;
+
+  if (existsSync(claudeMdPath)) {
+    const current = readFileSync(claudeMdPath, "utf8");
+    if (current.includes("graph_onboard")) {
+      console.log("✓ CLAUDE.md — graph workflow instructions already present");
+    } else {
+      appendFileSync(claudeMdPath, graphSection, "utf8");
+      console.log("✓ CLAUDE.md — appended graph workflow instructions");
+      wrote = true;
+    }
+  } else {
+    writeFileSync(claudeMdPath, `# CLAUDE.md\n\nThis file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.\n${graphSection}`, "utf8");
+    console.log("✓ CLAUDE.md — created with graph workflow instructions");
+    wrote = true;
+  }
+
+  // 4. Summary
   console.log("");
   if (wrote) {
     console.log("Graph is ready. Restart Claude Code to load the MCP server.");

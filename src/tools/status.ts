@@ -2,6 +2,7 @@ import { getDb } from "../db.js";
 import { getProjectRoot, getProjectSummary, listProjects } from "../nodes.js";
 import { optionalString } from "../validate.js";
 import { EngineError } from "../validate.js";
+import { computeContinuityConfidence } from "../continuity.js";
 import type { NodeRow, Evidence } from "../types.js";
 
 export interface StatusInput {
@@ -142,7 +143,16 @@ export function handleStatus(input: StatusInput): StatusResult | { projects: Ret
   const resolvedTasks = Math.min(summary.resolved, taskCount);
   if (taskCount > 0) {
     lines.push(progressBar(resolvedTasks, taskCount));
-    lines.push(`${summary.actionable} actionable | ${summary.blocked} blocked | ${summary.unresolved - summary.blocked - summary.actionable} waiting`);
+    // Continuity confidence signal
+    const cc = computeContinuityConfidence(project);
+    const ccBars = Math.ceil(cc.score / 20); // 0-5 filled blocks
+    const ccDisplay = "\u25a0".repeat(ccBars) + "\u25a1".repeat(5 - ccBars);
+    lines.push(`${summary.actionable} actionable | ${summary.blocked} blocked | ${summary.unresolved - summary.blocked - summary.actionable} waiting | continuity confidence: ${cc.confidence} ${ccDisplay}`);
+    if (cc.reasons.length > 0 && cc.confidence !== "high") {
+      for (const reason of cc.reasons) {
+        lines.push(`  - ${reason}`);
+      }
+    }
   } else {
     lines.push("No tasks yet");
   }

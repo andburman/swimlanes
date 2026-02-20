@@ -2,6 +2,7 @@ import { getDb } from "../db.js";
 import { getProjectRoot, getProjectSummary, listProjects } from "../nodes.js";
 import { optionalString, optionalNumber } from "../validate.js";
 import { EngineError } from "../validate.js";
+import { computeContinuityConfidence, type ContinuityConfidence } from "../continuity.js";
 import type { NodeRow, Evidence } from "../types.js";
 
 // [sl:yosc4NuV6j43Zv0fsDXDj] graph_onboard — single-call orientation for new agents
@@ -59,6 +60,7 @@ export interface OnboardResult {
     agent: string;
   }>;
   last_activity: string | null;
+  continuity_confidence: ContinuityConfidence;
   actionable: Array<{
     id: string;
     summary: string;
@@ -248,6 +250,9 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
     hint = `Project is empty — use graph_plan to decompose the goal into tasks.`;
   }
 
+  // 9. Continuity confidence signal
+  const continuity_confidence = computeContinuityConfidence(project);
+
   return {
     project,
     goal: root.summary,
@@ -260,6 +265,7 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
     knowledge: knowledgeRows,
     recently_resolved,
     last_activity,
+    continuity_confidence,
     actionable,
   };
 }

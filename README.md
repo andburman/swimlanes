@@ -1,6 +1,10 @@
 # Graph
 
-A task tracker built for AI agents, not humans.
+[![npm version](https://img.shields.io/npm/v/@graph-tl/graph)](https://www.npmjs.com/package/@graph-tl/graph)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![npm downloads](https://img.shields.io/npm/dm/@graph-tl/graph)](https://www.npmjs.com/package/@graph-tl/graph)
+
+Graph gives agents session-to-session memory with actionable next steps.
 
 Graph is an MCP server that gives agents persistent memory across sessions. They decompose work into dependency trees, claim tasks, record evidence of what they did, and hand off to the next agent automatically.
 
@@ -35,7 +39,7 @@ Graph gives agents what they actually need:
 - **Dependencies with cycle detection** — the engine knows what's blocked and what's ready
 - **Server-side ranking** — one call to get the highest-priority actionable task
 - **Evidence trail** — agents record decisions, commits, and test results so the next agent inherits that knowledge
-- **~450 tokens** for a full claim-work-resolve cycle (vs ~5000+ with Linear MCP)
+- **Minimal overhead** — batched operations and structured responses keep token usage low
 
 ## How it works
 
@@ -160,22 +164,14 @@ Environment variables (all optional):
 
 ## Token efficiency
 
-| Operation | Tokens | Round trips |
-|---|---|---|
-| Onboard to a 30-task project | ~500 | 1 |
-| Plan 4 tasks with dependencies | ~220 | 1 |
-| Get next actionable task | ~300 | 1 |
-| Resolve + see what unblocked | ~120 | 1 |
-| **Full claim-work-resolve cycle** | **~450** | **3** |
-
-~90% fewer tokens and ~50% fewer round trips vs traditional tracker MCP integrations.
+Graph is designed to minimize agent overhead. Every operation is a single MCP call with structured, compact responses — no pagination, no field filtering, no extra round trips. Batched operations like `graph_plan` and `graph_update` let agents do more per call, and `graph_onboard` delivers full project context in one shot instead of requiring a sequence of queries.
 
 ## Data & security
 
-Graph is fully local. Your data never leaves your machine.
+Your data stays on your machine.
 
 - **Single SQLite file** in `~/.graph/db/` — outside your repo, nothing to gitignore
-- **No network calls** — stdio MCP server, no telemetry, no cloud sync
+- **Local-first** — stdio MCP server, no telemetry, no cloud sync. The only network activity is `npx` fetching the package
 - **No secrets stored** — task summaries, evidence notes, and file path references only
 - **You own your data** — back it up, delete it, move it between machines
 

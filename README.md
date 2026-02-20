@@ -2,9 +2,28 @@
 
 A task tracker built for AI agents, not humans.
 
-Graph is an MCP server that lets agents plan, execute, and hand off work across sessions. It stores tasks as a dependency graph in SQLite — agents decompose work into subtrees, claim tasks, record what they did, and pass context to the next agent automatically.
+Graph is an MCP server that gives agents persistent memory across sessions. They decompose work into dependency trees, claim tasks, record evidence of what they did, and hand off to the next agent automatically.
 
-Humans create projects and review results. Agents do everything in between.
+## Install
+
+```bash
+npx -y @graph-tl/graph init
+```
+
+Restart Claude Code. That's it.
+
+## See it work
+
+Tell your agent: "Use graph to plan building a REST API with auth and tests."
+
+The agent will:
+1. Create a project (`graph_open`)
+2. Interview you about scope (`discovery`)
+3. Decompose into a dependency tree (`graph_plan`)
+4. Claim and work on tasks one by one (`graph_next` → work → `graph_update`)
+5. When you start a new session, the next agent picks up exactly where the last one left off (`graph_onboard`)
+
+No copy-pasting context. No re-explaining what was done. The graph carries it forward.
 
 ## Why
 
@@ -15,22 +34,10 @@ Graph gives agents what they actually need:
 - **Arbitrary nesting** — decompose work as deep as needed
 - **Dependencies with cycle detection** — the engine knows what's blocked and what's ready
 - **Server-side ranking** — one call to get the highest-priority actionable task
-- **Evidence trail** — agents record decisions, commits, and test results as they work, so the next agent inherits that knowledge
+- **Evidence trail** — agents record decisions, commits, and test results so the next agent inherits that knowledge
 - **~450 tokens** for a full claim-work-resolve cycle (vs ~5000+ with Linear MCP)
 
-## Use Cases
-
-**Multi-session projects.** You tell Claude Code to build a feature. It plans the work into a graph, finishes 3 of 5 tasks, and hits the context limit. You start a new session — the agent calls `graph_onboard`, sees what was done, what's left, and picks up the next task with full context. No copy-pasting, no re-explaining.
-
-**Agent handoff.** Agent 1 builds the backend. Agent 2 starts a fresh session to work on the frontend. It calls `graph_next` and gets the highest-priority unblocked task, along with evidence from the tasks it depends on — what was implemented, what decisions were made, what files were touched.
-
-**Complex decomposition.** You say "build me a CLI tool with auth, a database layer, and tests." The agent breaks this into a task tree with dependencies — tests depend on implementation, implementation depends on design. The engine tracks what's blocked and what's ready so the agent always works on the right thing.
-
-**Replanning mid-flight.** Halfway through a project, requirements change. The agent uses `graph_restructure` to drop irrelevant tasks, add new ones, and reparent subtrees. Dependencies recalculate automatically.
-
-## How It Works
-
-An agent's workflow with Graph looks like this:
+## How it works
 
 ```
 1. graph_onboard     → "What's the state of this project?"
@@ -41,13 +48,11 @@ An agent's workflow with Graph looks like this:
 6. graph_next        → "What's next?"
 ```
 
-When a new agent joins, `graph_onboard` returns everything it needs in one call: project status, task tree, recent evidence from completed work, all file references, and what's actionable now.
+When a new agent joins, `graph_onboard` returns everything it needs in one call: project goal, task tree, recent evidence, knowledge entries, what was recently resolved, and what's actionable now.
 
-### Example: Planning a project
+### Planning
 
-You tell the agent: "Build a REST API with authentication and tests."
-
-The agent calls `graph_plan` to create this structure:
+The agent calls `graph_plan` to create a dependency tree:
 
 ```
 Build REST API
@@ -62,9 +67,9 @@ Build REST API
     └── Integration tests    (depends on: Unit tests)
 ```
 
-`graph_next` immediately knows: "Write API spec" and "Database layer" are actionable. Everything else is blocked. When "Write API spec" is resolved, "Auth module" and "Routes" unblock automatically.
+`graph_next` immediately knows: "Write API spec" and "Database layer" are actionable. Everything else is blocked. When a task resolves, dependents unblock automatically.
 
-### Example: Agent handoff between sessions
+### Agent handoff
 
 Session 1 ends after completing 3 tasks. Session 2 starts:
 
@@ -72,13 +77,15 @@ Session 1 ends after completing 3 tasks. Session 2 starts:
 → graph_onboard("my-project")
 
 ← {
-    summary: { total: 8, resolved: 3, unresolved: 5, actionable: 2 },
-    recent_evidence: [
-      { task: "Auth module", type: "note", ref: "Used JWT with RS256, keys in /config" },
-      { task: "Auth module", type: "git", ref: "a]1b2c3d — implement auth middleware" },
-      ...
+    goal: "Build REST API",
+    hint: "2 actionable task(s) ready. 3 resolved recently.",
+    summary: { total: 8, resolved: 3, actionable: 2 },
+    recently_resolved: [
+      { summary: "Auth module", agent: "claude-code", resolved_at: "..." },
     ],
-    context_links: ["src/auth.ts", "src/db.ts", "config/keys.json"],
+    knowledge: [
+      { key: "auth-decisions", content: "JWT with RS256, keys in /config" },
+    ],
     actionable: [
       { summary: "Routes", priority: 8 },
       { summary: "Database layer", priority: 7 },
@@ -86,13 +93,11 @@ Session 1 ends after completing 3 tasks. Session 2 starts:
   }
 ```
 
-The new agent knows what was built, how, and what to do next — without reading the entire codebase or prior conversation.
+The new agent knows what was built, what decisions were made, and what to do next.
 
-### Code annotations: from static comments to traceable history
+### Code annotations
 
-Code comments tell you *what* code does. Graph annotations tell you *why it exists, who wrote it, and what was considered*.
-
-When agents work through Graph, they annotate key changes with `// [sl:nodeId]`:
+Agents annotate key changes with `// [sl:nodeId]`:
 
 ```typescript
 // [sl:OZ0or-q5TserCEfWUeMVv] Require evidence when resolving
@@ -105,28 +110,29 @@ if (input.resolved === true && !node.resolved) {
 }
 ```
 
-That node ID links to a task in the graph. A future agent (or human) can call `graph_context` or `graph_history` on that ID and get:
+That node ID links to a task in the graph. Call `graph_context` or `graph_history` on it to see what the task was, why it was done, what files were touched, and who did it.
 
-- **What the task was** — "Enforce evidence on resolve"
-- **Why it was done** — the evidence trail: design decisions, alternatives considered
-- **What else changed** — context links to every file modified for that task
-- **Who did it and when** — the full audit log
+## Tools
 
-Comments are a snapshot. Graph turns your codebase into a traceable history of decisions.
+| Tool | Purpose |
+|---|---|
+| **graph_onboard** | Single-call orientation: project summary, tree, evidence, knowledge, actionable tasks |
+| **graph_open** | Open or create a project. No args = list all projects |
+| **graph_plan** | Batch create tasks with dependencies. Atomic |
+| **graph_next** | Get next actionable task, ranked by priority/depth/recency. Optional claim |
+| **graph_context** | Deep-read a task: ancestors, children, dependency graph |
+| **graph_update** | Resolve tasks, add evidence. Reports newly unblocked tasks. Auto-resolves parents when all children complete |
+| **graph_connect** | Add/remove dependency edges with cycle detection |
+| **graph_query** | Search and filter by state, properties, text, ancestry |
+| **graph_restructure** | Move, merge, or drop tasks for replanning |
+| **graph_history** | Audit trail: who changed what, when |
+| **graph_knowledge_write** | Store persistent project knowledge (architecture decisions, conventions) |
+| **graph_knowledge_read** | Read knowledge entries or list all |
+| **graph_knowledge_search** | Search knowledge by substring |
 
-## Install
+## Configuration
 
-Run this in your project directory:
-
-```bash
-npx -y @graph-tl/graph init
-```
-
-This adds Graph to your `.mcp.json`. Restart Claude Code and you're done.
-
-### Manual setup
-
-If you prefer to configure it yourself, add this to `.mcp.json` in your project root:
+Add to `.mcp.json` (or run `npx -y @graph-tl/graph init`):
 
 ```json
 {
@@ -142,62 +148,35 @@ If you prefer to configure it yourself, add this to `.mcp.json` in your project 
 }
 ```
 
-### Configuration
-
 Environment variables (all optional):
 
 | Variable | Default | Description |
 |---|---|---|
-| `GRAPH_AGENT` | `default-agent` | Agent identity, attached to all writes |
-| `GRAPH_DB` | `~/.graph/db/<hash>/graph.db` | SQLite database path. Defaults to a per-project directory in your home folder — no files in your repo. |
+| `GRAPH_AGENT` | `default-agent` | Agent identity for audit trail |
+| `GRAPH_DB` | `~/.graph/db/<hash>/graph.db` | Database path (per-project, outside your repo) |
 | `GRAPH_CLAIM_TTL` | `60` | Soft claim expiry in minutes |
 
-## Tools
-
-| Tool | Purpose |
-|---|---|
-| **graph_onboard** | Single-call orientation for a new agent joining a project. Returns project summary, task tree, recent evidence, context links, and actionable tasks. |
-| **graph_open** | Open or create a project. No args = list all projects. |
-| **graph_plan** | Batch create tasks with parent-child and dependency relationships. Atomic. |
-| **graph_next** | Get the next actionable task, ranked by priority/depth/recency. Optional scope to a subtree. Optional soft claim. |
-| **graph_context** | Deep-read a task: ancestors, children tree, dependency graph. |
-| **graph_update** | Resolve tasks, add evidence/context links. Reports newly unblocked tasks. |
-| **graph_connect** | Add or remove dependency edges. Cycle detection on `depends_on`. |
-| **graph_query** | Search and filter tasks by state, properties, text, ancestry, actionability. |
-| **graph_restructure** | Move, merge, or drop tasks. For replanning. |
-| **graph_history** | Audit trail for a task — who changed what, when. |
-
-See [TOOLS.md](TOOLS.md) for full schemas and response shapes.
-
-## Token Efficiency
-
-Every response is compact JSON — no UI chrome, no avatar URLs, no pagination boilerplate. Measured against real Claude Code sessions:
+## Token efficiency
 
 | Operation | Tokens | Round trips |
 |---|---|---|
-| Onboard a new agent to a 30-task project | ~500 | 1 |
+| Onboard to a 30-task project | ~500 | 1 |
 | Plan 4 tasks with dependencies | ~220 | 1 |
-| Get next actionable task (with context) | ~300 | 1 |
-| Resolve a task + see what unblocked | ~120 | 1 |
+| Get next actionable task | ~300 | 1 |
+| Resolve + see what unblocked | ~120 | 1 |
 | **Full claim-work-resolve cycle** | **~450** | **3** |
 
-The same workflow through a traditional tracker's MCP integration typically costs ~4500 tokens across 6 round trips. **~90% token reduction, ~50% fewer round trips.**
+~90% fewer tokens and ~50% fewer round trips vs traditional tracker MCP integrations.
 
-## Data & Security
+## Data & security
 
 Graph is fully local. Your data never leaves your machine.
 
-- **Single SQLite file** — everything is stored in one `.db` file. By default it lives in `~/.graph/db/` — outside your repo, nothing to gitignore.
-- **No network calls** — Graph is a stdio MCP server. It reads and writes to disk. There is no telemetry, no cloud sync, no external API calls.
-- **No secrets in the graph** — Graph stores task summaries, evidence notes, and file path references. It does not read file contents, access credentials, or store source code.
-- **You control the data** — the SQLite file is yours. Back it up, delete it, move it between machines. There is no account, no server, no lock-in.
-
-## Design
-
-- **`resolved` boolean** is the only field the engine interprets. Drives dependency computation. `state` is freeform for agent semantics.
-- **Evidence model** — hints, notes, commits, test results are all evidence entries with a `type` field. One mechanism.
-- **Linked context** — nodes store pointers to files/commits/docs, not content blobs.
+- **Single SQLite file** in `~/.graph/db/` — outside your repo, nothing to gitignore
+- **No network calls** — stdio MCP server, no telemetry, no cloud sync
+- **No secrets stored** — task summaries, evidence notes, and file path references only
+- **You own your data** — back it up, delete it, move it between machines
 
 ## License
 
-MIT
+MIT — free and open source.

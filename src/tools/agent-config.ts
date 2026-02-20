@@ -99,6 +99,19 @@ The user controls the pace. Do not auto-claim the next task.
 - NEVER skip discovery on nodes with discovery:pending — the system will block you from decomposing
 - If you're approaching context limits, ensure your current task's state is captured (update with evidence even if not fully resolved) so the next agent can pick up where you left off
 
+# Record observations proactively
+
+Graph is the project memory across sessions. If something isn't in Graph, it's effectively forgotten. While working, record things you notice — even if they're not part of your current task:
+
+- **Warnings & errors**: CI failures, deprecation warnings, security vulnerabilities, linter issues
+- **Tech debt**: Code smells, outdated dependencies, missing tests, hardcoded values
+- **Broken things**: Flaky tests, dead links, misconfigured environments
+- **Ideas & improvements**: Performance opportunities, UX issues, missing features
+
+Use \`graph_plan\` to add observation nodes under the project root. Keep them lightweight — a clear summary is enough. They can always be dropped later if irrelevant.
+
+Default to "if in doubt, add a node." It's cheap to create and the next session will thank you.
+
 # Common mistakes to avoid
 
 - Setting dependencies on parent nodes instead of leaf nodes

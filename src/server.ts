@@ -199,6 +199,7 @@ const TOOLS = [
             type: "object",
             properties: {
               node_id: { type: "string" },
+              expected_rev: { type: "number", description: "Optimistic concurrency: reject if node's current rev doesn't match. Prevents silent overwrites by concurrent agents." },
               resolved: { type: "boolean" },
               resolved_reason: { type: "string", description: "Shorthand: auto-creates a note evidence entry. Use instead of add_evidence for simple cases." },
               discovery: { type: "string", description: "Discovery phase status: 'pending' or 'done'. Set to 'done' after completing discovery interview." },
@@ -459,8 +460,10 @@ export async function startServer(): Promise<void> {
     { capabilities: { tools: {}, resources: {} } }
   );
 
-  // Fire-and-forget version check
-  checkForUpdate();
+  // Fire-and-forget version check (opt-in: GRAPH_UPDATE_CHECK=1)
+  if (process.env.GRAPH_UPDATE_CHECK === "1") {
+    checkForUpdate();
+  }
 
   // List tools
   server.setRequestHandler(ListToolsRequestSchema, async () => ({

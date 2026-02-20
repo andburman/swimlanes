@@ -156,6 +156,7 @@ Environment variables (all optional):
 | `GRAPH_AGENT` | `default-agent` | Agent identity for audit trail |
 | `GRAPH_DB` | `~/.graph/db/<hash>/graph.db` | Database path (per-project, outside your repo) |
 | `GRAPH_CLAIM_TTL` | `60` | Soft claim expiry in minutes |
+| `GRAPH_UPDATE_CHECK` | `0` | Set to `1` to check npm for newer versions on startup |
 
 ## Token efficiency
 

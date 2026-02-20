@@ -1069,3 +1069,54 @@ describe("multi-project newly_actionable", () => {
     expect(result.newly_actionable!.some((n) => n.summary === "Waiting B")).toBe(true);
   });
 });
+
+describe("optimistic concurrency (expected_rev)", () => {
+  it("accepts update when rev matches", () => {
+    const { root } = openProject("occ", "Test", AGENT) as any;
+    const plan = handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Task" }] }, AGENT);
+    const id = plan.created[0].id;
+
+    // Node starts at rev 1
+    handleUpdate({
+      updates: [{ node_id: id, expected_rev: 1, summary: "Updated" }],
+    }, AGENT);
+
+    const ctx = handleContext({ node_id: id });
+    expect(ctx.node.summary).toBe("Updated");
+    expect(ctx.node.rev).toBe(2);
+  });
+
+  it("rejects update when rev does not match", () => {
+    const { root } = openProject("occ2", "Test", AGENT) as any;
+    const plan = handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Task" }] }, AGENT);
+    const id = plan.created[0].id;
+
+    expect(() => handleUpdate({
+      updates: [{ node_id: id, expected_rev: 99, summary: "Stale" }],
+    }, AGENT)).toThrow("expected 99");
+  });
+});
+
+describe("cross-project restructure guard", () => {
+  it("rejects move across projects", () => {
+    const { root: rootA } = openProject("cp-a", "A", AGENT) as any;
+    const { root: rootB } = openProject("cp-b", "B", AGENT) as any;
+    const plan = handlePlan({ nodes: [{ ref: "child", parent_ref: rootA.id, summary: "Child" }] }, AGENT);
+    const childId = plan.created[0].id;
+
+    expect(() => handleRestructure({
+      operations: [{ op: "move", node_id: childId, new_parent: rootB.id }],
+    }, AGENT)).toThrow("Cannot move node across projects");
+  });
+
+  it("rejects merge across projects", () => {
+    const { root: rootA } = openProject("cp-a2", "A", AGENT) as any;
+    const { root: rootB } = openProject("cp-b2", "B", AGENT) as any;
+    const planA = handlePlan({ nodes: [{ ref: "a", parent_ref: rootA.id, summary: "Node A" }] }, AGENT);
+    const planB = handlePlan({ nodes: [{ ref: "b", parent_ref: rootB.id, summary: "Node B" }] }, AGENT);
+
+    expect(() => handleRestructure({
+      operations: [{ op: "merge", source: planA.created[0].id, target: planB.created[0].id }],
+    }, AGENT)).toThrow("Cannot merge nodes across projects");
+  });
+});

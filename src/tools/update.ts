@@ -1,9 +1,10 @@
-import { updateNode, getNode, getChildren } from "../nodes.js";
+import { updateNode, getNode, getNodeOrThrow, getChildren } from "../nodes.js";
 import { findNewlyActionable } from "../edges.js";
-import { requireArray, requireString } from "../validate.js";
+import { requireArray, requireString, EngineError } from "../validate.js";
 
 export interface UpdateEntry {
   node_id: string;
+  expected_rev?: number;
   resolved?: boolean;
   resolved_reason?: string; // [sl:QBEtldx8PBWACftEM8MYl] Shorthand — auto-creates note evidence
   discovery?: string | null;
@@ -43,6 +44,17 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
   const resolvedProjects = new Set<string>();
 
   for (const entry of updates) {
+    // Optimistic concurrency: reject if rev doesn't match
+    if (entry.expected_rev !== undefined) {
+      const current = getNodeOrThrow(entry.node_id);
+      if (current.rev !== entry.expected_rev) {
+        throw new EngineError(
+          "rev_mismatch",
+          `Node ${entry.node_id} has rev ${current.rev}, expected ${entry.expected_rev}. Another agent may have modified it. Re-read and retry.`
+        );
+      }
+    }
+
     // Expand resolved_reason shorthand into evidence
     let evidence = entry.add_evidence;
     if (entry.resolved_reason) {

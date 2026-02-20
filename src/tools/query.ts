@@ -87,8 +87,10 @@ export function handleQuery(input: QueryInput): QueryResult {
   }
 
   if (filter?.has_evidence_type) {
-    conditions.push("n.evidence LIKE ?");
-    params.push(`%"type":"${filter.has_evidence_type}"%`);
+    conditions.push(
+      `EXISTS (SELECT 1 FROM json_each(n.evidence) WHERE json_extract(value, '$.type') = ?)`
+    );
+    params.push(filter.has_evidence_type);
   }
 
   if (filter?.is_leaf) {

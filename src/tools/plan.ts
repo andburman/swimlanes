@@ -1,7 +1,7 @@
 import { getDb } from "../db.js";
 import { createNode, getNode } from "../nodes.js";
 import { addEdge } from "../edges.js";
-import { requireArray, requireString, ValidationError, EngineError } from "../validate.js";
+import { requireArray, requireString, EngineError } from "../validate.js";
 
 export interface PlanNodeInput {
   ref: string;
@@ -39,7 +39,7 @@ export function handlePlan(input: PlanInput, agent: string): PlanResult {
   const refs = new Set<string>();
   for (const node of nodes) {
     if (refs.has(node.ref)) {
-      throw new Error(`Duplicate ref in batch: ${node.ref}`);
+      throw new EngineError("duplicate_ref", `Duplicate ref in batch: ${node.ref}`);
     }
     refs.add(node.ref);
   }
@@ -59,7 +59,8 @@ export function handlePlan(input: PlanInput, agent: string): PlanResult {
           if (existing) {
             parentId = existing.id;
           } else {
-            throw new Error(
+            throw new EngineError(
+              "invalid_parent_ref",
               `parent_ref "${nodeInput.parent_ref}" is neither a batch ref nor an existing node ID`
             );
           }
@@ -81,7 +82,8 @@ export function handlePlan(input: PlanInput, agent: string): PlanResult {
       } else {
         // If no parent, the node must be a root. But we need a project.
         // Infer from first node that has a parent, or error.
-        throw new Error(
+        throw new EngineError(
+          "missing_parent",
           `Node "${nodeInput.ref}" has no parent_ref. All planned nodes must have a parent (an existing node or a batch ref).`
         );
       }
@@ -113,7 +115,8 @@ export function handlePlan(input: PlanInput, agent: string): PlanResult {
           if (existing) {
             toId = existing.id;
           } else {
-            throw new Error(
+            throw new EngineError(
+              "invalid_depends_on",
               `depends_on "${dep}" in node "${nodeInput.ref}" is neither a batch ref nor an existing node ID`
             );
           }
@@ -127,7 +130,8 @@ export function handlePlan(input: PlanInput, agent: string): PlanResult {
         });
 
         if (result.rejected) {
-          throw new Error(
+          throw new EngineError(
+            "edge_rejected",
             `Dependency edge from "${nodeInput.ref}" to "${dep}" rejected: ${result.reason}`
           );
         }

@@ -2,7 +2,7 @@ import { getDb } from "../db.js";
 import { getNodeOrThrow, getNode, getChildren, updateNode } from "../nodes.js";
 import { getEdgesFrom, getEdgesTo, findNewlyActionable } from "../edges.js";
 import { logEvent } from "../events.js";
-import { requireArray, requireString } from "../validate.js";
+import { requireArray, requireString, EngineError } from "../validate.js";
 import type { Evidence } from "../types.js";
 
 export interface MoveOp {
@@ -86,8 +86,13 @@ function handleMove(op: MoveOp, agent: string): { node_id: string; result: strin
   const node = getNodeOrThrow(op.node_id);
   const newParent = getNodeOrThrow(op.new_parent);
 
+  if (node.project !== newParent.project) {
+    throw new EngineError("cross_project", `Cannot move node across projects: "${node.project}" → "${newParent.project}"`);
+  }
+
   if (wouldCreateParentCycle(op.node_id, op.new_parent)) {
-    throw new Error(
+    throw new EngineError(
+      "cycle_detected",
       `Move would create cycle: ${op.node_id} cannot be moved under ${op.new_parent}`
     );
   }
@@ -114,6 +119,10 @@ function handleMerge(op: MergeOp, agent: string): { node_id: string; result: str
   const db = getDb();
   const source = getNodeOrThrow(op.source);
   const target = getNodeOrThrow(op.target);
+
+  if (source.project !== target.project) {
+    throw new EngineError("cross_project", `Cannot merge nodes across projects: "${source.project}" → "${target.project}"`);
+  }
 
   // Move source's children to target and recompute their depths
   const movedChildren = db.prepare("SELECT id FROM nodes WHERE parent = ?").all(op.source) as Array<{ id: string }>;
@@ -259,7 +268,7 @@ export function handleRestructure(
     } else if (op.op === "delete") {
       requireString((op as DeleteOp).node_id, `operations[${i}].node_id`);
     } else {
-      throw new Error(`Unknown operation: ${op.op}`);
+      throw new EngineError("unknown_op", `Unknown operation: ${op.op}`);
     }
   }
 

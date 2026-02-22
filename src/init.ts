@@ -98,7 +98,11 @@ This project uses Graph for task tracking across sessions.
       wrote = true;
     }
   } else {
-    console.log("⚠ CLAUDE.md not found. Run /init in Claude Code to create it, then re-run this command to add graph workflow instructions.");
+    const newClaudeMd = `# CLAUDE.md
+${graphSection}`;
+    writeFileSync(claudeMdPath, newClaudeMd, "utf8");
+    console.log("✓ CLAUDE.md — created with graph workflow instructions");
+    wrote = true;
   }
 
   // 4. Summary

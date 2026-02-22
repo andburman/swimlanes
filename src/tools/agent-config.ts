@@ -63,7 +63,23 @@ graph_next({ project: "<project-name>", claim: true })
 \`\`\`
 Read the task summary, ancestor chain (for scope), resolved dependencies (for context on what was done before you), and context links (for files to look at).
 
-## 4. PLAN
+## 4. PLAN (mandatory)
+**Every task requires a plan before any code is written. No exceptions.**
+
+1. **Read** — Read the files you'll modify. Understand current patterns, conventions, and surrounding code.
+2. **Design** — Decide your approach: what to change, where, and why. Consider edge cases and how changes interact with existing code.
+3. **Write the plan** — Record your plan as a state update on the node:
+\`\`\`
+graph_update({ updates: [{
+  node_id: "<task-id>",
+  state: {
+    plan: ["Step 1: ...", "Step 2: ...", "Step 3: ..."],
+    files: ["src/foo.ts", "test/foo.test.ts"]
+  }
+}] })
+\`\`\`
+4. **Scope** — If the task is larger than expected, decompose it with \`graph_plan\` instead of doing it all at once.
+
 If you discover work that isn't in the graph, add it BEFORE executing:
 \`\`\`
 graph_plan({ nodes: [{ ref: "new-work", parent_ref: "<parent-id>", summary: "..." }] })
@@ -76,7 +92,7 @@ When decomposing work:
 - Parent nodes are organizational — they resolve when all children resolve. Don't put work in parent nodes.
 
 ## 5. WORK
-Execute the claimed task. While working:
+Execute the plan. Do not deviate without updating the plan first. While working:
 - Annotate key code changes with \`// [sl:nodeId]\` where nodeId is the task you're working on
 - This creates a traceable link from code back to the task, its evidence, and its history
 - Build and run tests before considering a task done
@@ -118,6 +134,7 @@ When showing project state to the user, always use \`graph_status({ project: "..
 
 - If you see a banner warning about CLAUDE.md, relay it to the user. If CLAUDE.md is missing entirely, tell them to run \`/init\` first, then \`npx -y @graph-tl/graph init\`. If CLAUDE.md exists but is missing graph instructions, tell them to run \`npx -y @graph-tl/graph init\`.
 - NEVER start work without a claimed task
+- NEVER write code without a plan — read the code, design the approach, record the plan on the node via graph_update state, THEN implement
 - NEVER resolve without evidence
 - NEVER execute ad-hoc work — add it to the graph first via graph_plan
 - NEVER auto-continue to the next task — pause and let the user decide
@@ -226,6 +243,7 @@ The retro is not optional busywork — it's the mechanism that makes agents bett
 
 # Common mistakes to avoid
 
+- Jumping straight from claiming a task to writing code without reading the code and planning the approach first
 - Setting dependencies on parent nodes instead of leaf nodes
 - Running project scaffolding tools (create-next-app, etc.) before planning in the graph
 - Resolving tasks without running tests

@@ -48,3 +48,6 @@ npx vitest run -t "creates a new project"  # Run a single test by name
 ## Graph workflow
 
 This project uses Graph for its own task tracking. Start every session with `graph_onboard` to see project state, actionable tasks, and continuity confidence. Follow the claim-work-resolve loop: `graph_next` (claim) → do work → `graph_update` (resolve with evidence). Don't execute ad-hoc work — add it to the graph first via `graph_plan`.
+
+- **Every change goes through the graph — no exceptions.** Even small fixes and one-line changes get a node via `graph_plan` before implementation. "It's just a quick fix" is not an excuse to bypass the workflow.
+- **Stay focused on what was asked.** Don't propose adjacent work, extra refactors, or "while we're here" improvements. If you notice something worth doing, add it as a graph node silently — don't pitch it to the user.

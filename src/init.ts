@@ -84,6 +84,7 @@ This project uses Graph for task tracking across sessions.
 - **Always resolve with evidence.** Committing code is not enough — call \`graph_update\` with evidence (what changed, why, test results). The next agent depends on this.
 - **Pause after each task.** Show status with \`graph_status\`, then wait for the user. Don't auto-continue to the next task.
 - **Record what you notice.** Bugs, tech debt, ideas found while working — add them as nodes via \`graph_plan\`. If it's not in the graph, it's forgotten.
+- **Ideas go to the graph, not to implementation.** When the user shares an idea, understand it, discuss if needed, then add it as a node via \`graph_plan\`. Don't ask "want me to build this?" — the graph is the backlog.
 - **Write knowledge for the next session.** When you learn something reusable (environment setup, conventions, gotchas), write it with \`graph_knowledge_write\`.
 - **Retro after significant work.** Reflect on friction, missed context, and repeated mistakes. Identify behavioral patterns that should become CLAUDE.md instructions — these are the highest-value findings because they improve every future session.
 `;

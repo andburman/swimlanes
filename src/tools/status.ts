@@ -3,6 +3,7 @@ import { getProjectRoot, getProjectSummary, listProjects } from "../nodes.js";
 import { optionalString } from "../validate.js";
 import { EngineError } from "../validate.js";
 import { computeContinuityConfidence } from "../continuity.js";
+import { computeIntegrity } from "../integrity.js";
 import type { NodeRow, Evidence } from "../types.js";
 
 export interface StatusInput {
@@ -235,6 +236,41 @@ export function handleStatus(input: StatusInput): StatusResult | { projects: Ret
       lines.push(`- ${k.key} (${timeAgo(k.updated_at)})`);
     }
     lines.push("");
+  }
+
+  // [sl:7bQaAQjJZnY7-ItScrtip] Integrity audit section
+  const integrity = computeIntegrity(project);
+  if (integrity.issues.length > 0) {
+    lines.push("## Integrity");
+    lines.push("");
+    lines.push(`Score: ${integrity.score}/100 — ${integrity.issues.length} issue(s)`);
+    lines.push("");
+
+    // Group by type
+    const grouped = new Map<string, typeof integrity.issues>();
+    for (const issue of integrity.issues) {
+      const group = grouped.get(issue.type) ?? [];
+      group.push(issue);
+      grouped.set(issue.type, group);
+    }
+
+    const typeLabels: Record<string, string> = {
+      weak_evidence: "Weak Evidence",
+      stale_claim: "Stale Claims",
+      orphan: "Orphan Nodes",
+      stale_task: "Stale Tasks",
+    };
+
+    for (const [type, items] of grouped) {
+      lines.push(`**${typeLabels[type] ?? type}** (${items.length})`);
+      for (const item of items.slice(0, 5)) {
+        lines.push(`- ${item.summary} — ${item.detail}`);
+      }
+      if (items.length > 5) {
+        lines.push(`- _...and ${items.length - 5} more_`);
+      }
+      lines.push("");
+    }
   }
 
   return {

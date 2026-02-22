@@ -19,6 +19,7 @@ import { handleResolve } from "../src/tools/resolve.js";
 import { updateNode } from "../src/nodes.js";
 import { ValidationError, EngineError } from "../src/validate.js";
 import { computeContinuityConfidence } from "../src/continuity.js";
+import { computeIntegrity } from "../src/integrity.js";
 import { getDb } from "../src/db.js";
 
 const AGENT = "test-agent";
@@ -2437,5 +2438,190 @@ describe("graph_resolve", () => {
   it("throws without required fields", () => {
     expect(() => handleResolve({ node_id: "", message: "test" } as any, AGENT)).toThrow();
     expect(() => handleResolve({ node_id: "abc" } as any, AGENT)).toThrow();
+  });
+});
+
+describe("integrity audit", () => {
+  it("returns clean score for well-maintained project", () => {
+    const { root } = openProject("integrity-clean", "Clean project", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [{ ref: "a", parent_ref: root.id, summary: "Task A" }],
+    }, AGENT);
+
+    // Resolve with good evidence + context_links
+    handleUpdate({
+      updates: [{
+        node_id: plan.created[0].id,
+        resolved: true,
+        add_evidence: [
+          { type: "git", ref: "abc123 — fix thing" },
+          { type: "note", ref: "Did the thing" },
+        ],
+        add_context_links: ["src/foo.ts"],
+      }],
+    }, AGENT);
+
+    const result = computeIntegrity("integrity-clean");
+    expect(result.score).toBe(100);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it("flags weak evidence — resolved without git or context_links", () => {
+    const { root } = openProject("integrity-weak", "Weak project", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [{ ref: "a", parent_ref: root.id, summary: "Task A" }],
+    }, AGENT);
+
+    // Resolve with only a note (no git, no context_links)
+    handleUpdate({
+      updates: [{
+        node_id: plan.created[0].id,
+        resolved: true,
+        add_evidence: [{ type: "note", ref: "Did it" }],
+      }],
+    }, AGENT);
+
+    const result = computeIntegrity("integrity-weak");
+    expect(result.issues.length).toBeGreaterThan(0);
+    expect(result.issues[0].type).toBe("weak_evidence");
+    expect(result.score).toBeLessThan(100);
+  });
+
+  it("flags stale claims — claimed > 24h ago", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T10:00:00.000Z"));
+      const { root } = openProject("integrity-stale-claim", "Stale claim", AGENT) as any;
+      const plan = handlePlan({
+        nodes: [{ ref: "a", parent_ref: root.id, summary: "Task A" }],
+      }, AGENT);
+
+      // Claim the task
+      handleUpdate({
+        updates: [{
+          node_id: plan.created[0].id,
+          properties: { _claimed_by: "some-agent", _claimed_at: "2026-01-01T10:00:00.000Z" },
+        }],
+      }, AGENT);
+
+      // Advance 25 hours
+      vi.setSystemTime(new Date("2026-01-02T11:00:00.000Z"));
+
+      const result = computeIntegrity("integrity-stale-claim");
+      const staleClaims = result.issues.filter(i => i.type === "stale_claim");
+      expect(staleClaims.length).toBe(1);
+      expect(staleClaims[0].detail).toContain("some-agent");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flags orphan nodes — unresolved child of resolved parent", () => {
+    const { root } = openProject("integrity-orphan", "Orphan test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Parent task" },
+        { ref: "child", parent_ref: "parent", summary: "Child task" },
+      ],
+    }, AGENT);
+
+    // Force-resolve parent without resolving child (bypass auto-resolve by directly updating DB)
+    const db = getDb();
+    db.prepare("UPDATE nodes SET resolved = 1, evidence = ? WHERE id = ?").run(
+      JSON.stringify([{ type: "note", ref: "manual", agent: AGENT, timestamp: new Date().toISOString() }]),
+      plan.created[0].id
+    );
+
+    const result = computeIntegrity("integrity-orphan");
+    const orphans = result.issues.filter(i => i.type === "orphan");
+    expect(orphans.length).toBe(1);
+    expect(orphans[0].summary).toBe("Child task");
+  });
+
+  it("flags stale tasks — unresolved, unclaimed, old", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T10:00:00.000Z"));
+      const { root } = openProject("integrity-stale-task", "Stale tasks", AGENT) as any;
+      handlePlan({
+        nodes: [{ ref: "a", parent_ref: root.id, summary: "Old task" }],
+      }, AGENT);
+
+      // Advance 8 days
+      vi.setSystemTime(new Date("2026-01-09T10:00:00.000Z"));
+
+      const result = computeIntegrity("integrity-stale-task");
+      const stale = result.issues.filter(i => i.type === "stale_task");
+      expect(stale.length).toBeGreaterThan(0);
+      expect(stale[0].detail).toContain("days");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips auto-resolved nodes for weak evidence check", () => {
+    const { root } = openProject("integrity-auto", "Auto-resolve", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Parent" },
+        { ref: "child", parent_ref: "parent", summary: "Child" },
+      ],
+    }, AGENT);
+
+    // Resolve child with good evidence — parent auto-resolves
+    handleUpdate({
+      updates: [{
+        node_id: plan.created[1].id,
+        resolved: true,
+        add_evidence: [
+          { type: "git", ref: "abc — done" },
+          { type: "note", ref: "Implemented" },
+        ],
+        add_context_links: ["src/file.ts"],
+      }],
+    }, AGENT);
+
+    const result = computeIntegrity("integrity-auto");
+    // Parent auto-resolved — should NOT be flagged as weak evidence
+    const weakParent = result.issues.filter(i => i.type === "weak_evidence" && i.summary === "Parent");
+    expect(weakParent).toHaveLength(0);
+  });
+
+  it("surfaces in graph_onboard response", () => {
+    const { root } = openProject("integrity-onboard", "Onboard test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [{ ref: "a", parent_ref: root.id, summary: "Task" }],
+    }, AGENT);
+    handleUpdate({
+      updates: [{
+        node_id: plan.created[0].id,
+        resolved: true,
+        add_evidence: [{ type: "note", ref: "Done" }],
+      }],
+    }, AGENT);
+
+    const onboard = handleOnboard({ project: "integrity-onboard" }) as any;
+    expect(onboard.integrity).toBeDefined();
+    expect(onboard.integrity.score).toBeDefined();
+    expect(onboard.integrity.issues).toBeDefined();
+  });
+
+  it("surfaces in graph_status formatted output", () => {
+    const { root } = openProject("integrity-status", "Status test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [{ ref: "a", parent_ref: root.id, summary: "Task" }],
+    }, AGENT);
+    // Resolve with weak evidence to trigger integrity section
+    handleUpdate({
+      updates: [{
+        node_id: plan.created[0].id,
+        resolved: true,
+        add_evidence: [{ type: "note", ref: "Done" }],
+      }],
+    }, AGENT);
+
+    const status = handleStatus({ project: "integrity-status" }) as any;
+    expect(status.formatted).toContain("Integrity");
+    expect(status.formatted).toContain("Weak Evidence");
   });
 });

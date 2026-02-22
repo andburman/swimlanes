@@ -3,6 +3,7 @@ import { getProjectRoot, getProjectSummary, listProjects } from "../nodes.js";
 import { optionalString, optionalNumber } from "../validate.js";
 import { EngineError } from "../validate.js";
 import { computeContinuityConfidence, type ContinuityConfidence } from "../continuity.js";
+import { computeIntegrity, type IntegrityResult } from "../integrity.js";
 import type { NodeRow, Evidence } from "../types.js";
 
 // [sl:yosc4NuV6j43Zv0fsDXDj] graph_onboard — single-call orientation for new agents
@@ -68,6 +69,7 @@ export interface OnboardResult {
   }>;
   last_activity: string | null;
   continuity_confidence: ContinuityConfidence;
+  integrity: IntegrityResult;
   actionable: Array<{
     id: string;
     summary: string;
@@ -347,7 +349,10 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
   // 9. Continuity confidence signal
   const continuity_confidence = computeContinuityConfidence(project);
 
-  // 10. Rehydrate checklist
+  // 10. Integrity audit — per-node data quality issues
+  const integrity = computeIntegrity(project);
+
+  // 11. Rehydrate checklist
   const checklist = computeChecklist(summary, recent_evidence, knowledgeRows, actionable, db, project);
 
   // Strict mode: prepend hint warning when action items exist
@@ -369,6 +374,7 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
     recently_resolved,
     last_activity,
     continuity_confidence,
+    integrity,
     actionable,
     checklist,
   };

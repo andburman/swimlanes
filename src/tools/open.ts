@@ -5,7 +5,6 @@ import type { Node } from "../types.js";
 export interface OpenInput {
   project?: string;
   goal?: string;
-  skip_discovery?: boolean;
 }
 
 export type OpenResult =
@@ -48,7 +47,7 @@ export function handleOpen(input: OpenInput, agent: string): OpenResult {
     root = createNode({
       project,
       summary: goal ?? project,
-      discovery: input?.skip_discovery ? "done" : "pending",
+      discovery: "pending",
       agent,
     });
     isNew = true;
@@ -61,8 +60,6 @@ export function handleOpen(input: OpenInput, agent: string): OpenResult {
   // Guide the agent on what to do next
   if (isNew && root.discovery === "pending") {
     result.hint = `New project created. Discovery is pending — interview the user to understand scope and goals, then set discovery to "done" via graph_update before decomposing with graph_plan.`;
-  } else if (isNew) {
-    result.hint = `New project created. Ready to decompose — use graph_plan to add tasks.`;
   } else if (root.discovery === "pending") {
     result.hint = `Discovery is still pending on this project. Complete the discovery interview, then set discovery to "done" via graph_update.`;
   } else if (summary.actionable > 0) {

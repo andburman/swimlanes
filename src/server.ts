@@ -119,10 +119,6 @@ const TOOLS = [
           type: "string",
           description: "Project goal/description. Used on creation only.",
         },
-        skip_discovery: {
-          type: "boolean",
-          description: "Skip discovery phase — create project ready for immediate planning. Default false.",
-        },
       },
     },
   },

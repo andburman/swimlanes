@@ -55,15 +55,10 @@ describe("graph_open", () => {
     expect(result.hint).toContain("Discovery is pending");
   });
 
-  it("skip_discovery creates project ready for planning", () => {
-    const result = handleOpen({ project: "quick", goal: "Quick project", skip_discovery: true }, AGENT) as any;
-    expect(result.root.discovery).toBe("done");
-    expect(result.hint).toContain("graph_plan");
-    expect(result.hint).not.toContain("Discovery");
-
-    // Should be able to plan immediately
-    const plan = handlePlan({ nodes: [{ ref: "a", parent_ref: result.root.id, summary: "Task" }] }, AGENT);
-    expect(plan.created).toHaveLength(1);
+  it("new projects always start with discovery pending", () => {
+    const result = handleOpen({ project: "quick", goal: "Quick project" }, AGENT) as any;
+    expect(result.root.discovery).toBe("pending");
+    expect(result.hint).toContain("Discovery");
   });
 
   it("returns hint for project with actionable tasks", () => {

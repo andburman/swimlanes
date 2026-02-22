@@ -816,9 +816,9 @@ describe("graph_onboard checklist", () => {
     handleKnowledgeWrite({ project: "healthy", key: "arch", content: "Architecture notes" }, AGENT);
 
     const result = handleOnboard({ project: "healthy" }) as any;
-    expect(result.checklist).toHaveLength(6);
+    expect(result.checklist).toHaveLength(7);
     const checks = result.checklist.map((c: any) => c.check);
-    expect(checks).toEqual(["review_evidence", "review_knowledge", "confirm_blockers", "check_stale", "resolve_claimed", "plan_next_actions"]);
+    expect(checks).toEqual(["review_evidence", "review_knowledge", "confirm_blockers", "check_stale", "resolve_claimed", "check_pending_verification", "plan_next_actions"]);
     // All should pass for a healthy project
     for (const item of result.checklist) {
       expect(item.status).toBe("pass");
@@ -967,7 +967,7 @@ describe("graph_onboard checklist", () => {
     openProject("empty", "Empty project", AGENT);
 
     const result = handleOnboard({ project: "empty" }) as any;
-    expect(result.checklist).toHaveLength(6);
+    expect(result.checklist).toHaveLength(7);
     // No action_required on an empty project
     const actionRequired = result.checklist.filter((c: any) => c.status === "action_required");
     expect(actionRequired).toHaveLength(0);
@@ -2882,5 +2882,87 @@ describe("strict solo mode", () => {
     }] }, AGENT);
     expect(result.updated.length).toBeGreaterThanOrEqual(1);
     expect(result.updated[0].node_id).toBe(plan.created[0].id);
+  });
+});
+
+// [sl:QKuJkdiYUncO6_YVhbJ73] Verification checkpoints
+describe("verification checkpoints", () => {
+  beforeEach(() => initDb(":memory:"));
+
+  it("surfaces pending_verification in graph_next", () => {
+    const { root } = openProject("verify-next", "Test verification", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Build UI" },
+      { ref: "b", parent_ref: root.id, summary: "Normal task" },
+    ] }, AGENT);
+
+    // Flag one task for verification
+    handleUpdate({ updates: [{
+      node_id: plan.created[0].id,
+      properties: { _needs_verification: new Date().toISOString() },
+    }] }, AGENT);
+
+    const result = handleNext({ project: "verify-next", count: 5 }, AGENT);
+    expect(result.pending_verification).toBeDefined();
+    expect(result.pending_verification).toHaveLength(1);
+    expect(result.pending_verification![0].id).toBe(plan.created[0].id);
+    expect(result.pending_verification![0].summary).toBe("Build UI");
+  });
+
+  it("omits pending_verification when none flagged", () => {
+    const { root } = openProject("verify-none", "No verification", AGENT) as any;
+    handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Task" },
+    ] }, AGENT);
+
+    const result = handleNext({ project: "verify-none" }, AGENT);
+    expect(result.pending_verification).toBeUndefined();
+  });
+
+  it("cleared when flag set to null", () => {
+    const { root } = openProject("verify-clear", "Clear verification", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Task" },
+    ] }, AGENT);
+
+    handleUpdate({ updates: [{
+      node_id: plan.created[0].id,
+      properties: { _needs_verification: "true" },
+    }] }, AGENT);
+
+    // Clear the flag
+    handleUpdate({ updates: [{
+      node_id: plan.created[0].id,
+      properties: { _needs_verification: null },
+    }] }, AGENT);
+
+    const result = handleNext({ project: "verify-clear" }, AGENT);
+    expect(result.pending_verification).toBeUndefined();
+  });
+
+  it("shows in onboard checklist when verification pending", () => {
+    const { root } = openProject("verify-onboard", "Onboard verification", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Needs review" },
+    ] }, AGENT);
+
+    handleUpdate({ updates: [{
+      node_id: plan.created[0].id,
+      properties: { _needs_verification: "true" },
+    }] }, AGENT);
+
+    const result = handleOnboard({ project: "verify-onboard" }) as any;
+    const check = result.checklist.find((c: any) => c.check === "check_pending_verification");
+    expect(check).toBeDefined();
+    expect(check.status).toBe("action_required");
+    expect(check.action).toContain("_needs_verification");
+  });
+
+  it("passes onboard checklist when no verification pending", () => {
+    openProject("verify-pass", "No verification", AGENT);
+    const result = handleOnboard({ project: "verify-pass" }) as any;
+    const check = result.checklist.find((c: any) => c.check === "check_pending_verification");
+    expect(check).toBeDefined();
+    expect(check.status).toBe("pass");
   });
 });

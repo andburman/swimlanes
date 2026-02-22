@@ -116,6 +116,22 @@ if (input.resolved === true && !node.resolved) {
 
 That node ID links to a task in the graph. Call `graph_context` or `graph_history` on it to see what the task was, why it was done, what files were touched, and who did it.
 
+## State & evidence model
+
+Graph tracks three complementary layers per task:
+
+| Layer | Fields | Purpose |
+|---|---|---|
+| **Task state** | `resolved`, `blocked`, `state` | Drive dependency computation and actionability ranking |
+| **Evidence** | `evidence[]` — type, ref, agent, timestamp | Immutable trail: commits, test results, decisions |
+| **Repo pointers** | `context_links[]` — file paths, URLs | Bridge from DB task to actual code changes |
+
+When a task resolves, high-quality evidence has three parts: a **git commit** (traceable artifact), a **note** (what was done and why), and **context_links** (which files changed). The engine measures this as a quality KPI and flags tasks with weak evidence.
+
+**Continuity confidence** (0-100) scores how well the project supports agent handoff based on evidence coverage, staleness, knowledge gaps, and stale blockers. Returned in `graph_onboard` so the next agent knows whether to trust the existing state or re-verify.
+
+The `state` field is agent-defined and engine-ignored — use it for your own lifecycle tracking (draft, review, etc.) without affecting dependency computation.
+
 ## Tools
 
 | Tool | Purpose |
@@ -127,10 +143,13 @@ That node ID links to a task in the graph. Call `graph_context` or `graph_histor
 | **graph_tree** | Full project tree visualization with resolve status |
 | **graph_context** | Deep-read a task: ancestors, children, dependency graph |
 | **graph_update** | Resolve tasks, add evidence. Reports newly unblocked tasks. Auto-resolves parents when all children complete |
+| **graph_resolve** | One-call resolve helper: auto-collects git commits and modified files as evidence |
 | **graph_connect** | Add/remove dependency edges with cycle detection |
 | **graph_query** | Search and filter by state, properties, text, ancestry |
 | **graph_restructure** | Move, merge, or drop tasks for replanning |
+| **graph_status** | Formatted project dashboard: progress, task tree, integrity, knowledge |
 | **graph_history** | Audit trail: who changed what, when |
+| **graph_retro** | Structured retrospective: gather resolved tasks, record categorized findings |
 | **graph_knowledge_write** | Store persistent project knowledge (architecture decisions, conventions) |
 | **graph_knowledge_read** | Read knowledge entries or list all |
 | **graph_knowledge_search** | Search knowledge by substring |

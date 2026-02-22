@@ -32,9 +32,17 @@ export interface ClaimedTask {
   claimed_at: string;
 }
 
+// [sl:QKuJkdiYUncO6_YVhbJ73] Verification checkpoints
+export interface PendingVerification {
+  id: string;
+  summary: string;
+  flagged_at: string;
+}
+
 export interface NextResult {
   nodes: NextResultNode[];
   your_claims?: ClaimedTask[];
+  pending_verification?: PendingVerification[];
   auto_scoped?: { parent_id: string; parent_summary: string };
   retro_nudge?: string;
 }
@@ -221,6 +229,26 @@ export function handleNext(
       id: r.id,
       summary: r.summary,
       claimed_at: r.claimed_at,
+    }));
+  }
+
+  // [sl:QKuJkdiYUncO6_YVhbJ73] Surface nodes pending human verification
+  const verificationRows = db
+    .prepare(
+      `SELECT id, summary, json_extract(properties, '$._needs_verification') as flagged_at
+       FROM nodes
+       WHERE project = ? AND resolved = 0
+       AND json_extract(properties, '$._needs_verification') IS NOT NULL
+       AND json_extract(properties, '$._needs_verification') != 'false'
+       ORDER BY updated_at ASC`
+    )
+    .all(project) as Array<{ id: string; summary: string; flagged_at: string }>;
+
+  if (verificationRows.length > 0) {
+    result.pending_verification = verificationRows.map((r) => ({
+      id: r.id,
+      summary: r.summary,
+      flagged_at: typeof r.flagged_at === "string" ? r.flagged_at : "true",
     }));
   }
 

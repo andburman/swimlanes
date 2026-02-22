@@ -172,7 +172,22 @@ function computeChecklist(
       action: `Resolve claimed nodes (${claimedIds}) via graph_resolve, or unclaim via graph_update with properties: { _claimed_by: null, _claimed_at: null }.` });
   }
 
-  // 6. plan_next_actions — check actionable tasks exist
+  // 6. check_pending_verification — [sl:QKuJkdiYUncO6_YVhbJ73] nodes flagged for human verification
+  const verificationCount = (db.prepare(
+    `SELECT COUNT(*) as cnt FROM nodes
+     WHERE project = ? AND resolved = 0
+     AND json_extract(properties, '$._needs_verification') IS NOT NULL
+     AND json_extract(properties, '$._needs_verification') != 'false'`
+  ).get(project) as { cnt: number }).cnt;
+  if (verificationCount === 0) {
+    checklist.push({ check: "check_pending_verification", status: "pass", message: "No tasks pending human verification." });
+  } else {
+    checklist.push({ check: "check_pending_verification", status: "action_required",
+      message: `${verificationCount} task(s) flagged for human verification — review before resolving.`,
+      action: `Run graph_query({ project: "${project}", filter: { properties: { _needs_verification: true } } }) to find them. After verifying, clear the flag via graph_update with properties: { _needs_verification: null }.` });
+  }
+
+  // 7. plan_next_actions — check actionable tasks exist
   if (actionable.length > 0) {
     checklist.push({ check: "plan_next_actions", status: "pass", message: `${actionable.length} actionable task(s) ready.` });
   } else if (summary.unresolved > 0) {

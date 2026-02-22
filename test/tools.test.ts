@@ -2625,3 +2625,262 @@ describe("integrity audit", () => {
     expect(status.formatted).toContain("Weak Evidence");
   });
 });
+
+// [sl:Klw0ZCFcnBXBqf0Quhqsf] Auto-remediation suggestions
+describe("auto-remediation", () => {
+  beforeEach(() => initDb(":memory:"));
+
+  it("includes suggestion on integrity issues", () => {
+    const { root } = openProject("remediation", "Test remediation", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Task A" },
+    ] }, AGENT);
+    // Resolve without evidence
+    handleUpdate({ updates: [{ node_id: plan.created[0].id, resolved: true, resolved_reason: "done" }] }, AGENT);
+
+    const integrity = computeIntegrity("remediation");
+    const weakIssues = integrity.issues.filter(i => i.type === "weak_evidence");
+    expect(weakIssues.length).toBeGreaterThan(0);
+    for (const issue of weakIssues) {
+      expect(issue.suggestion).toBeDefined();
+      expect(issue.suggestion.length).toBeGreaterThan(0);
+      expect(issue.suggestion).toContain("graph_update");
+    }
+  });
+
+  it("includes suggestion on stale claims", () => {
+    vi.useFakeTimers();
+    try {
+      const { root } = openProject("stale-sug", "Test stale", AGENT) as any;
+      const plan = handlePlan({ nodes: [
+        { ref: "a", parent_ref: root.id, summary: "Task A" },
+      ] }, AGENT);
+      handleUpdate({ updates: [{ node_id: plan.created[0].id, properties: { _claimed_by: "old-agent", _claimed_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString() } }] }, AGENT);
+
+      const integrity = computeIntegrity("stale-sug");
+      const staleClaims = integrity.issues.filter(i => i.type === "stale_claim");
+      expect(staleClaims.length).toBe(1);
+      expect(staleClaims[0].suggestion).toContain("_claimed_by");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// [sl:Aqr3gbYg_XDgv2YOj8_qb] Quality KPI tracking
+describe("quality KPI", () => {
+  beforeEach(() => initDb(":memory:"));
+
+  it("returns 100% for empty projects", () => {
+    openProject("qkpi-empty", "Test QKI", AGENT);
+    const integrity = computeIntegrity("qkpi-empty");
+    expect(integrity.quality_kpi.percentage).toBe(100);
+    expect(integrity.quality_kpi.resolved).toBe(0);
+  });
+
+  it("tracks high-quality evidence percentage", () => {
+    const { root } = openProject("qkpi", "Test quality", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Good task" },
+      { ref: "b", parent_ref: root.id, summary: "Weak task" },
+    ] }, AGENT);
+
+    // High quality: git + note + context_links
+    handleUpdate({ updates: [{
+      node_id: plan.created[0].id,
+      resolved: true,
+      add_evidence: [{ type: "git", ref: "abc123" }, { type: "note", ref: "did stuff" }],
+      add_context_links: ["src/foo.ts"],
+    }] }, AGENT);
+
+    // Low quality: note only
+    handleUpdate({ updates: [{
+      node_id: plan.created[1].id,
+      resolved: true,
+      add_evidence: [{ type: "note", ref: "did stuff" }],
+    }] }, AGENT);
+
+    const integrity = computeIntegrity("qkpi");
+    expect(integrity.quality_kpi.high_quality).toBe(1);
+    expect(integrity.quality_kpi.resolved).toBeGreaterThanOrEqual(2);
+    expect(integrity.quality_kpi.percentage).toBeLessThan(100);
+  });
+
+  it("shows quality KPI in graph_status", () => {
+    const { root } = openProject("qkpi-status", "Test quality status", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Task A" },
+    ] }, AGENT);
+    handleUpdate({ updates: [{
+      node_id: plan.created[0].id,
+      resolved: true,
+      add_evidence: [{ type: "git", ref: "abc" }, { type: "note", ref: "done" }],
+      add_context_links: ["file.ts"],
+    }] }, AGENT);
+
+    const status = handleStatus({ project: "qkpi-status" }) as any;
+    expect(status.formatted).toContain("quality:");
+  });
+
+  it("warns in graph_plan when quality is low", () => {
+    const { root: warnRoot } = openProject("qkpi-warn", "Test quality warning", AGENT) as any;
+    // Create and resolve 6 tasks without quality evidence
+    for (let i = 0; i < 6; i++) {
+      const p = handlePlan({ nodes: [{ ref: `t${i}`, parent_ref: warnRoot.id, summary: `Task ${i}` }] }, AGENT);
+      handleUpdate({ updates: [{ node_id: p.created[0].id, resolved: true, resolved_reason: "done" }] }, AGENT);
+    }
+
+    // Now add new work — should include quality warning
+    const result = handlePlan({ nodes: [
+      { ref: "new", parent_ref: warnRoot.id, summary: "New task" },
+    ] }, AGENT);
+    expect(result.quality_warning).toBeDefined();
+    expect(result.quality_warning).toContain("quality");
+  });
+});
+
+// [sl:Mox85EgzSfvuXq-JhMFwW] [sl:KCXJHZdDEnQfK9sOfrYhW] [sl:U9NWRB-786Bm52yOAx8Wd] Onboard UX
+describe("onboard UX improvements", () => {
+  beforeEach(() => initDb(":memory:"));
+
+  it("includes recommended_next for projects with actionable tasks", () => {
+    const { root } = openProject("onboard-ux", "Test onboard UX", AGENT) as any;
+    handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Do something", properties: { priority: 5 } },
+    ] }, AGENT);
+
+    const result = handleOnboard({ project: "onboard-ux" }) as any;
+    expect(result.recommended_next).toBeDefined();
+    expect(result.recommended_next.id).toBeDefined();
+    expect(result.recommended_next.summary).toBe("Do something");
+    expect(result.recommended_next.rationale).toContain("priority");
+  });
+
+  it("omits recommended_next for empty projects", () => {
+    openProject("onboard-empty", "Empty project", AGENT);
+    const result = handleOnboard({ project: "onboard-empty" }) as any;
+    expect(result.recommended_next).toBeUndefined();
+  });
+
+  it("includes blocked_nodes with reasons and age", () => {
+    const { root } = openProject("onboard-blocked", "Test blocked", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Blocked task" },
+    ] }, AGENT);
+    handleUpdate({ updates: [{ node_id: plan.created[0].id, blocked: true, blocked_reason: "Waiting on design" }] }, AGENT);
+
+    const result = handleOnboard({ project: "onboard-blocked" }) as any;
+    expect(result.blocked_nodes).toHaveLength(1);
+    expect(result.blocked_nodes[0].id).toBe(plan.created[0].id);
+    expect(result.blocked_nodes[0].reason).toBe("Waiting on design");
+    expect(result.blocked_nodes[0].age_hours).toBeGreaterThanOrEqual(0);
+  });
+
+  it("includes claimed_nodes with owner and age", () => {
+    const { root } = openProject("onboard-claimed", "Test claimed", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Claimed task" },
+    ] }, AGENT);
+    handleUpdate({ updates: [{ node_id: plan.created[0].id, properties: {
+      _claimed_by: "some-agent", _claimed_at: new Date().toISOString()
+    } }] }, AGENT);
+
+    const result = handleOnboard({ project: "onboard-claimed" }) as any;
+    expect(result.claimed_nodes).toHaveLength(1);
+    expect(result.claimed_nodes[0].claimed_by).toBe("some-agent");
+    expect(result.claimed_nodes[0].age_hours).toBeGreaterThanOrEqual(0);
+  });
+
+  it("includes action field on checklist items when issues exist", () => {
+    const { root } = openProject("onboard-action", "Test actions", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Blocked task" },
+    ] }, AGENT);
+    handleUpdate({ updates: [{ node_id: plan.created[0].id, blocked: true, blocked_reason: "External dep" }] }, AGENT);
+
+    const result = handleOnboard({ project: "onboard-action" }) as any;
+    const blockerCheck = result.checklist.find((c: any) => c.check === "confirm_blockers");
+    expect(blockerCheck).toBeDefined();
+    expect(blockerCheck.status).toBe("action_required");
+    expect(blockerCheck.action).toBeDefined();
+    expect(blockerCheck.action).toContain("unblock");
+  });
+});
+
+// [sl:rIuWFYZUQAhN0ViM9y0Ey] Strict solo mode
+describe("strict solo mode", () => {
+  beforeEach(() => initDb(":memory:"));
+
+  it("rejects resolve without required evidence when strict is enabled", () => {
+    const proj = handleOpen({ project: "strict-proj", goal: "Strict test" }, AGENT) as any;
+    // Enable strict mode on project root
+    updateNode({ node_id: proj.root.id, agent: AGENT, discovery: "done", properties: { strict: true } });
+
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: proj.root.id, summary: "Task A" },
+    ] }, AGENT);
+
+    // Try resolving with only a note — should fail (missing git/test + context_links)
+    expect(() => {
+      handleUpdate({ updates: [{
+        node_id: plan.created[0].id,
+        resolved: true,
+        add_evidence: [{ type: "note", ref: "did stuff" }],
+      }] }, AGENT);
+    }).toThrow(/Strict mode requires/);
+  });
+
+  it("allows resolve with full evidence when strict is enabled", () => {
+    const proj = handleOpen({ project: "strict-pass", goal: "Strict pass" }, AGENT) as any;
+    updateNode({ node_id: proj.root.id, agent: AGENT, discovery: "done", properties: { strict: true } });
+
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: proj.root.id, summary: "Task A" },
+    ] }, AGENT);
+
+    // Resolve with git + note + context_links — should pass
+    const result = handleUpdate({ updates: [{
+      node_id: plan.created[0].id,
+      resolved: true,
+      add_evidence: [{ type: "git", ref: "abc123" }, { type: "note", ref: "did stuff" }],
+      add_context_links: ["src/foo.ts"],
+    }] }, AGENT);
+
+    // updated includes child + auto-resolved parent (single child)
+    expect(result.updated.length).toBeGreaterThanOrEqual(1);
+    expect(result.updated[0].node_id).toBe(plan.created[0].id);
+  });
+
+  it("does not enforce strict mode when not enabled", () => {
+    const { root } = openProject("non-strict", "Non-strict", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Task A" },
+    ] }, AGENT);
+
+    // Resolve with minimal evidence — should pass without strict mode
+    const result = handleUpdate({ updates: [{
+      node_id: plan.created[0].id,
+      resolved: true,
+      resolved_reason: "done",
+    }] }, AGENT);
+    expect(result.updated.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("allows test evidence as alternative to git in strict mode", () => {
+    const proj = handleOpen({ project: "strict-test", goal: "Strict test evidence" }, AGENT) as any;
+    updateNode({ node_id: proj.root.id, agent: AGENT, discovery: "done", properties: { strict: true } });
+
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: proj.root.id, summary: "Task A" },
+    ] }, AGENT);
+
+    const result = handleUpdate({ updates: [{
+      node_id: plan.created[0].id,
+      resolved: true,
+      add_evidence: [{ type: "test", ref: "all pass" }, { type: "note", ref: "did stuff" }],
+      add_context_links: ["test/foo.test.ts"],
+    }] }, AGENT);
+    expect(result.updated.length).toBeGreaterThanOrEqual(1);
+    expect(result.updated[0].node_id).toBe(plan.created[0].id);
+  });
+});

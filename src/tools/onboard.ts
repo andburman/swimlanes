@@ -18,6 +18,7 @@ export interface ChecklistItem {
   check: string;
   status: "pass" | "warn" | "action_required";
   message: string;
+  action?: string; // [sl:U9NWRB-786Bm52yOAx8Wd] Prescriptive next step
 }
 
 export interface OnboardResult {
@@ -75,6 +76,25 @@ export interface OnboardResult {
     summary: string;
     properties: Record<string, unknown>;
   }>;
+  // [sl:Mox85EgzSfvuXq-JhMFwW] Recommended next task with rationale
+  recommended_next?: {
+    id: string;
+    summary: string;
+    rationale: string;
+  };
+  // [sl:KCXJHZdDEnQfK9sOfrYhW] Blocked and claimed node lists
+  blocked_nodes: Array<{
+    id: string;
+    summary: string;
+    reason: string | null;
+    age_hours: number;
+  }>;
+  claimed_nodes: Array<{
+    id: string;
+    summary: string;
+    claimed_by: string;
+    age_hours: number;
+  }>;
   checklist: ChecklistItem[];
 }
 
@@ -83,6 +103,8 @@ function computeChecklist(
   recent_evidence: OnboardResult["recent_evidence"],
   knowledge: OnboardResult["knowledge"],
   actionable: OnboardResult["actionable"],
+  blocked_nodes: OnboardResult["blocked_nodes"],
+  claimed_nodes: OnboardResult["claimed_nodes"],
   db: ReturnType<typeof getDb>,
   project: string,
 ): ChecklistItem[] {
@@ -94,14 +116,15 @@ function computeChecklist(
   } else if (recent_evidence.length > 0) {
     checklist.push({ check: "review_evidence", status: "pass", message: "Recent evidence exists — review for context." });
   } else {
-    // Resolved tasks exist but no evidence at all
     const resolvedWithEvidence = (db.prepare(
       "SELECT COUNT(*) as cnt FROM nodes WHERE project = ? AND parent IS NOT NULL AND resolved = 1 AND evidence != '[]'"
     ).get(project) as { cnt: number }).cnt;
     if (resolvedWithEvidence === 0 && summary.resolved < 5) {
-      checklist.push({ check: "review_evidence", status: "warn", message: `${summary.resolved} resolved task(s) have no evidence.` });
+      checklist.push({ check: "review_evidence", status: "warn", message: `${summary.resolved} resolved task(s) have no evidence.`,
+        action: `Add evidence to resolved tasks via graph_update with add_evidence.` });
     } else if (resolvedWithEvidence === 0) {
-      checklist.push({ check: "review_evidence", status: "action_required", message: `${summary.resolved} resolved task(s) exist but none have evidence — context may be lost.` });
+      checklist.push({ check: "review_evidence", status: "action_required", message: `${summary.resolved} resolved task(s) exist but none have evidence — context may be lost.`,
+        action: `Run graph_query({ project: "${project}", filter: { resolved: true } }) to find them, then add evidence via graph_update.` });
     } else {
       checklist.push({ check: "review_evidence", status: "pass", message: "Evidence exists on resolved tasks." });
     }
@@ -111,7 +134,8 @@ function computeChecklist(
   if (knowledge.length > 0) {
     checklist.push({ check: "review_knowledge", status: "pass", message: `${knowledge.length} knowledge entry(s) available.` });
   } else if (summary.resolved >= 5) {
-    checklist.push({ check: "review_knowledge", status: "warn", message: "Mature project (5+ resolved tasks) with no knowledge entries." });
+    checklist.push({ check: "review_knowledge", status: "warn", message: "Mature project (5+ resolved tasks) with no knowledge entries.",
+      action: `Write key findings via graph_knowledge_write({ project: "${project}", key: "<topic>", content: "..." }).` });
   } else {
     checklist.push({ check: "review_knowledge", status: "pass", message: "No knowledge entries yet — expected for early projects." });
   }
@@ -120,7 +144,10 @@ function computeChecklist(
   if (summary.blocked === 0) {
     checklist.push({ check: "confirm_blockers", status: "pass", message: "No blocked items." });
   } else {
-    checklist.push({ check: "confirm_blockers", status: "action_required", message: `${summary.blocked} blocked item(s) — confirm blockers are still valid before proceeding.` });
+    const blockerIds = blocked_nodes.slice(0, 3).map(b => b.id).join(", ");
+    checklist.push({ check: "confirm_blockers", status: "action_required",
+      message: `${summary.blocked} blocked item(s) — confirm blockers are still valid before proceeding.`,
+      action: `Review blocked nodes (${blockerIds}) — unblock via graph_update with blocked: false, or confirm still valid.` });
   }
 
   // 4. check_stale — unresolved tasks not updated in 7+ days
@@ -131,24 +158,26 @@ function computeChecklist(
   if (staleCount === 0) {
     checklist.push({ check: "check_stale", status: "pass", message: "No stale unresolved tasks." });
   } else {
-    checklist.push({ check: "check_stale", status: "warn", message: `${staleCount} unresolved task(s) not updated in 7+ days.` });
+    checklist.push({ check: "check_stale", status: "warn", message: `${staleCount} unresolved task(s) not updated in 7+ days.`,
+      action: `Run graph_query({ project: "${project}", filter: { resolved: false }, sort: "recent" }) to find stale tasks. Drop or update them.` });
   }
 
   // 5. resolve_claimed — detect claimed-but-unresolved nodes (forgotten resolutions)
-  const claimedCount = (db.prepare(
-    "SELECT COUNT(*) as cnt FROM nodes WHERE project = ? AND parent IS NOT NULL AND resolved = 0 AND json_extract(properties, '$._claimed_by') IS NOT NULL"
-  ).get(project) as { cnt: number }).cnt;
-  if (claimedCount === 0) {
+  if (claimed_nodes.length === 0) {
     checklist.push({ check: "resolve_claimed", status: "pass", message: "No claimed unresolved tasks." });
   } else {
-    checklist.push({ check: "resolve_claimed", status: "action_required", message: `${claimedCount} claimed task(s) still unresolved — resolve or unclaim before starting new work.` });
+    const claimedIds = claimed_nodes.slice(0, 3).map(c => c.id).join(", ");
+    checklist.push({ check: "resolve_claimed", status: "action_required",
+      message: `${claimed_nodes.length} claimed task(s) still unresolved — resolve or unclaim before starting new work.`,
+      action: `Resolve claimed nodes (${claimedIds}) via graph_resolve, or unclaim via graph_update with properties: { _claimed_by: null, _claimed_at: null }.` });
   }
 
   // 6. plan_next_actions — check actionable tasks exist
   if (actionable.length > 0) {
     checklist.push({ check: "plan_next_actions", status: "pass", message: `${actionable.length} actionable task(s) ready.` });
   } else if (summary.unresolved > 0) {
-    checklist.push({ check: "plan_next_actions", status: "warn", message: "No actionable tasks — all remaining work is blocked." });
+    checklist.push({ check: "plan_next_actions", status: "warn", message: "No actionable tasks — all remaining work is blocked.",
+      action: `Check dependencies via graph_query({ project: "${project}", filter: { is_blocked: true } }) and unblock or restructure.` });
   } else if (summary.total <= 1) {
     checklist.push({ check: "plan_next_actions", status: "pass", message: "Empty project — use graph_plan to add tasks." });
   } else {
@@ -282,7 +311,7 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
   const actionableRows = db
     .prepare(
       `SELECT n.id, n.summary, n.properties FROM nodes n
-       WHERE n.project = ? AND n.resolved = 0 AND n.blocked = 0
+       WHERE n.project = ? AND n.parent IS NOT NULL AND n.resolved = 0 AND n.blocked = 0
        AND NOT EXISTS (
          SELECT 1 FROM nodes child WHERE child.parent = n.id AND child.resolved = 0
        )
@@ -331,6 +360,44 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
     .get(project) as { last: string | null };
   const last_activity = lastActivityRow.last;
 
+  // [sl:KCXJHZdDEnQfK9sOfrYhW] Blocked nodes with reasons and age
+  const blockedRows = db
+    .prepare(
+      `SELECT id, summary, blocked_reason, updated_at
+       FROM nodes
+       WHERE project = ? AND parent IS NOT NULL AND resolved = 0 AND blocked = 1
+       ORDER BY updated_at ASC`
+    )
+    .all(project) as Array<{ id: string; summary: string; blocked_reason: string | null; updated_at: string }>;
+
+  const now = Date.now();
+  const blocked_nodes = blockedRows.map((r) => ({
+    id: r.id,
+    summary: r.summary,
+    reason: r.blocked_reason,
+    age_hours: Math.floor((now - new Date(r.updated_at).getTime()) / (60 * 60 * 1000)),
+  }));
+
+  // [sl:KCXJHZdDEnQfK9sOfrYhW] Claimed unresolved nodes with owner and age
+  const claimedRows = db
+    .prepare(
+      `SELECT id, summary,
+              json_extract(properties, '$._claimed_by') as claimed_by,
+              json_extract(properties, '$._claimed_at') as claimed_at
+       FROM nodes
+       WHERE project = ? AND parent IS NOT NULL AND resolved = 0
+       AND json_extract(properties, '$._claimed_by') IS NOT NULL
+       ORDER BY json_extract(properties, '$._claimed_at') ASC`
+    )
+    .all(project) as Array<{ id: string; summary: string; claimed_by: string; claimed_at: string }>;
+
+  const claimed_nodes = claimedRows.map((r) => ({
+    id: r.id,
+    summary: r.summary,
+    claimed_by: r.claimed_by,
+    age_hours: Math.floor((now - new Date(r.claimed_at).getTime()) / (60 * 60 * 1000)),
+  }));
+
   // Build hint based on project state
   let hint: string | undefined;
   if (root.discovery === "pending") {
@@ -353,12 +420,30 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
   const integrity = computeIntegrity(project);
 
   // 11. Rehydrate checklist
-  const checklist = computeChecklist(summary, recent_evidence, knowledgeRows, actionable, db, project);
+  const checklist = computeChecklist(summary, recent_evidence, knowledgeRows, actionable, blocked_nodes, claimed_nodes, db, project);
 
   // Strict mode: prepend hint warning when action items exist
   if (strict && checklist.some((c) => c.status === "action_required")) {
     const prefix = "\u26A0 Rehydrate checklist has action items \u2014 review before claiming work.";
     hint = hint ? `${prefix}\n${hint}` : prefix;
+  }
+
+  // [sl:Mox85EgzSfvuXq-JhMFwW] Recommended next task with rationale
+  let recommended_next: OnboardResult["recommended_next"];
+  if (actionable.length > 0) {
+    const top = actionable[0];
+    const props = top.properties;
+    const parts: string[] = [];
+    if (props.priority) parts.push(`priority ${props.priority}`);
+    if (claimed_nodes.length === 0) parts.push("no stale claims");
+    else parts.push(`${claimed_nodes.length} stale claim(s) — consider resolving first`);
+    if (blocked_nodes.length === 0) parts.push("no blockers");
+    parts.push("highest ranked by priority/depth/staleness");
+    recommended_next = {
+      id: top.id,
+      summary: top.summary,
+      rationale: parts.join(", "),
+    };
   }
 
   return {
@@ -376,6 +461,9 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
     continuity_confidence,
     integrity,
     actionable,
+    recommended_next,
+    blocked_nodes,
+    claimed_nodes,
     checklist,
   };
 }

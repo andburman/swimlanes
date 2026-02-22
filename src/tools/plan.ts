@@ -2,6 +2,7 @@ import { getDb } from "../db.js";
 import { createNode, getNode } from "../nodes.js";
 import { addEdge } from "../edges.js";
 import { requireArray, requireString, EngineError } from "../validate.js";
+import { computeIntegrity } from "../integrity.js";
 
 export interface PlanNodeInput {
   ref: string;
@@ -18,6 +19,7 @@ export interface PlanInput {
 
 export interface PlanResult {
   created: Array<{ ref: string; id: string }>;
+  quality_warning?: string; // [sl:Aqr3gbYg_XDgv2YOj8_qb]
 }
 
 export function handlePlan(input: PlanInput, agent: string): PlanResult {
@@ -154,5 +156,17 @@ export function handlePlan(input: PlanInput, agent: string): PlanResult {
 
   transaction();
 
-  return { created };
+  // [sl:Aqr3gbYg_XDgv2YOj8_qb] Quality KPI warning before adding new work
+  const result: PlanResult = { created };
+  if (created.length > 0) {
+    const firstNode = getNode(created[0].id);
+    if (firstNode) {
+      const kpi = computeIntegrity(firstNode.project).quality_kpi;
+      if (kpi.resolved >= 5 && kpi.percentage < 50) {
+        result.quality_warning = `Evidence quality is low (${kpi.percentage}% high-quality). Consider improving evidence on existing resolved tasks before adding new work.`;
+      }
+    }
+  }
+
+  return result;
 }

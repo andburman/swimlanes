@@ -147,13 +147,17 @@ export function handleStatus(input: StatusInput): StatusResult | { projects: Ret
   lines.push(root.summary);
   lines.push("");
   const resolvedTasks = Math.min(summary.resolved, taskCount);
+  const integrity = computeIntegrity(project);
   if (taskCount > 0) {
     lines.push(progressBar(resolvedTasks, taskCount));
     // Continuity confidence signal
     const cc = computeContinuityConfidence(project);
     const ccBars = Math.ceil(cc.score / 20); // 0-5 filled blocks
     const ccDisplay = "\u25a0".repeat(ccBars) + "\u25a1".repeat(5 - ccBars);
-    lines.push(`${summary.actionable} actionable | ${summary.blocked} blocked | ${summary.unresolved - summary.blocked - summary.actionable} waiting | continuity confidence: ${cc.confidence} ${ccDisplay}`);
+    // [sl:Aqr3gbYg_XDgv2YOj8_qb] Quality KPI in header
+    const qk = integrity.quality_kpi;
+    const qkLabel = qk.resolved > 0 ? ` | quality: ${qk.percentage}% (${qk.high_quality}/${qk.resolved})` : "";
+    lines.push(`${summary.actionable} actionable | ${summary.blocked} blocked | ${summary.unresolved - summary.blocked - summary.actionable} waiting | continuity confidence: ${cc.confidence} ${ccDisplay}${qkLabel}`);
     if (cc.reasons.length > 0 && cc.confidence !== "high") {
       for (const reason of cc.reasons) {
         lines.push(`  - ${reason}`);
@@ -239,7 +243,6 @@ export function handleStatus(input: StatusInput): StatusResult | { projects: Ret
   }
 
   // [sl:7bQaAQjJZnY7-ItScrtip] Integrity audit section
-  const integrity = computeIntegrity(project);
   if (integrity.issues.length > 0) {
     lines.push("## Integrity");
     lines.push("");
@@ -265,6 +268,7 @@ export function handleStatus(input: StatusInput): StatusResult | { projects: Ret
       lines.push(`**${typeLabels[type] ?? type}** (${items.length})`);
       for (const item of items.slice(0, 5)) {
         lines.push(`- ${item.summary} — ${item.detail}`);
+        lines.push(`  fix: ${item.suggestion}`);
       }
       if (items.length > 5) {
         lines.push(`- _...and ${items.length - 5} more_`);

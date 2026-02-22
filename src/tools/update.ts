@@ -1,5 +1,5 @@
 import { getDb } from "../db.js";
-import { updateNode, getNode, getNodeOrThrow, getChildren } from "../nodes.js";
+import { updateNode, getNode, getNodeOrThrow, getChildren, getProjectRoot } from "../nodes.js";
 import { findNewlyActionable } from "../edges.js";
 import { requireArray, requireString, EngineError } from "../validate.js";
 // [sl:k2dMFzFIn-gK_A9KjK6-D] Batch updates wrapped in transaction
@@ -83,6 +83,32 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
       remove_context_links: entry.remove_context_links,
       add_evidence: evidence,
     });
+
+    // [sl:rIuWFYZUQAhN0ViM9y0Ey] Strict solo mode enforcement on resolve
+    if (entry.resolved === true) {
+      const root = getProjectRoot(node.project);
+      if (root && root.properties.strict === true) {
+        const ev = Array.isArray(node.evidence) ? node.evidence : [];
+        const links = Array.isArray(node.context_links) ? node.context_links : [];
+        // Skip check for auto-resolved parents (they inherit quality from children)
+        const isAutoResolve = false; // explicit resolve, not auto
+        if (!isAutoResolve) {
+          const hasNote = ev.some((e: { type: string }) => e.type === "note");
+          const hasTraceableArtifact = ev.some((e: { type: string }) => e.type === "git" || e.type === "test");
+          const hasLinks = links.length > 0;
+          const missing: string[] = [];
+          if (!hasNote) missing.push("note evidence (what was done)");
+          if (!hasTraceableArtifact) missing.push("git or test evidence (traceable artifact)");
+          if (!hasLinks) missing.push("context_links (files modified)");
+          if (missing.length > 0) {
+            throw new EngineError(
+              "strict_mode_violation",
+              `Strict mode requires: ${missing.join(", ")}. Use graph_resolve for automatic evidence collection, or add manually via add_evidence and add_context_links.`
+            );
+          }
+        }
+      }
+    }
 
     updated.push({ node_id: node.id, rev: node.rev });
 

@@ -8,12 +8,21 @@ export interface IntegrityIssue {
   node_id: string;
   summary: string;
   detail: string;
+  suggestion: string; // [sl:Klw0ZCFcnBXBqf0Quhqsf] Auto-remediation action
+}
+
+// [sl:Aqr3gbYg_XDgv2YOj8_qb] Quality KPI — evidence quality tracking
+export interface QualityKpi {
+  high_quality: number;   // resolved tasks with git + note + context_links
+  resolved: number;       // total resolved non-root tasks
+  percentage: number;     // 0-100
 }
 
 export interface IntegrityResult {
   issues: IntegrityIssue[];
   score: number; // 0-100
   checked_at: string;
+  quality_kpi: QualityKpi;
 }
 
 export function computeIntegrity(project: string): IntegrityResult {
@@ -46,6 +55,7 @@ export function computeIntegrity(project: string): IntegrityResult {
         node_id: row.id,
         summary: row.summary,
         detail: "Resolved without git evidence or context_links — hard to trace what changed.",
+        suggestion: `graph_update({ updates: [{ node_id: "${row.id}", add_evidence: [{ type: "git", ref: "<commit>" }], add_context_links: ["<file>"] }] })`,
       });
     }
   }
@@ -62,6 +72,7 @@ export function computeIntegrity(project: string): IntegrityResult {
       node_id: row.id,
       summary: row.summary,
       detail: "Resolved with no evidence at all.",
+      suggestion: `graph_update({ updates: [{ node_id: "${row.id}", add_evidence: [{ type: "note", ref: "<what was done>" }] }] })`,
     });
   }
 
@@ -83,6 +94,7 @@ export function computeIntegrity(project: string): IntegrityResult {
       node_id: row.id,
       summary: row.summary,
       detail: `Claimed by ${row.claimed_by} ${claimedAge}h ago — resolve or unclaim.`,
+      suggestion: `graph_update({ updates: [{ node_id: "${row.id}", properties: { _claimed_by: null, _claimed_at: null } }] })`,
     });
   }
 
@@ -100,6 +112,7 @@ export function computeIntegrity(project: string): IntegrityResult {
       node_id: row.id,
       summary: row.summary,
       detail: "Unresolved but parent is resolved — data inconsistency.",
+      suggestion: `graph_update({ updates: [{ node_id: "${row.id}", resolved: true, resolved_reason: "Orphaned — parent already resolved" }] })`,
     });
   }
 
@@ -120,6 +133,7 @@ export function computeIntegrity(project: string): IntegrityResult {
       node_id: row.id,
       summary: row.summary,
       detail: `Not updated in ${staleDays} days — still relevant?`,
+      suggestion: `Review: resolve, drop via graph_restructure({ operations: [{ op: "drop", node_id: "${row.id}", reason: "No longer relevant" }] }), or update to confirm still needed.`,
     });
   }
 
@@ -134,9 +148,32 @@ export function computeIntegrity(project: string): IntegrityResult {
     score = Math.max(0, Math.round(100 * (1 - affectedNodes / totalNonRoot)));
   }
 
+  // [sl:Aqr3gbYg_XDgv2YOj8_qb] Quality KPI — % resolved with high-quality evidence
+  const resolvedNonRoot = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM nodes WHERE project = ? AND parent IS NOT NULL AND resolved = 1"
+  ).get(project) as { cnt: number }).cnt;
+
+  let highQuality = 0;
+  for (const row of resolvedRows) {
+    const evidence: Evidence[] = JSON.parse(row.evidence);
+    const contextLinks: string[] = JSON.parse(row.context_links);
+    if (evidence.length === 1 && evidence[0].ref === "Auto-resolved: all children completed") continue;
+    const hasGit = evidence.some(e => e.type === "git");
+    const hasNote = evidence.some(e => e.type === "note");
+    const hasLinks = contextLinks.length > 0;
+    if (hasGit && hasNote && hasLinks) highQuality++;
+  }
+
+  const quality_kpi: QualityKpi = {
+    high_quality: highQuality,
+    resolved: resolvedNonRoot,
+    percentage: resolvedNonRoot > 0 ? Math.round((highQuality / resolvedNonRoot) * 100) : 100,
+  };
+
   return {
     issues,
     score,
     checked_at: now.toISOString(),
+    quality_kpi,
   };
 }

@@ -35,6 +35,7 @@ export interface ClaimedTask {
 export interface NextResult {
   nodes: NextResultNode[];
   your_claims?: ClaimedTask[];
+  auto_scoped?: { parent_id: string; parent_summary: string };
   retro_nudge?: string;
 }
 
@@ -49,10 +50,31 @@ export function handleNext(
   const claim = optionalBoolean(input?.claim, "claim") ?? false;
   const db = getDb();
 
+  // [sl:Ufz48Frf4aeXz9ztEODKE] Auto-scope: if agent has an active claim, scope to that claim's parent
+  let effectiveScope = scope;
+  let autoScoped = false;
+  if (!scope) {
+    const claimCutoff_ = new Date(Date.now() - claimTtlMinutes * 60 * 1000).toISOString();
+    const recentClaim = db.prepare(
+      `SELECT parent FROM nodes
+       WHERE project = ?
+       AND json_extract(properties, '$._claimed_by') = ?
+       AND json_extract(properties, '$._claimed_at') > ?
+       AND parent IS NOT NULL
+       ORDER BY json_extract(properties, '$._claimed_at') DESC
+       LIMIT 1`
+    ).get(project, agent, claimCutoff_) as { parent: string } | undefined;
+
+    if (recentClaim) {
+      effectiveScope = recentClaim.parent;
+      autoScoped = true;
+    }
+  }
+
   // [sl:HB5daFH1HlFXzuTluibnk] Scope filtering: restrict to descendants of a given node
   let scopeFilter = "";
   const scopeParams: unknown[] = [];
-  if (scope) {
+  if (effectiveScope) {
     const descendantIds = db
       .prepare(
         `WITH RECURSIVE descendants(id) AS (
@@ -62,7 +84,7 @@ export function handleNext(
         )
         SELECT id FROM descendants`
       )
-      .all(scope) as Array<{ id: string }>;
+      .all(effectiveScope) as Array<{ id: string }>;
 
     if (descendantIds.length === 0) {
       return { nodes: [] };
@@ -188,6 +210,12 @@ export function handleNext(
     .all(project, agent, claimCutoff) as Array<{ id: string; summary: string; claimed_at: string }>;
 
   const result: NextResult = { nodes: results };
+  if (autoScoped && effectiveScope) {
+    const scopeNode = getNode(effectiveScope);
+    if (scopeNode) {
+      result.auto_scoped = { parent_id: scopeNode.id, parent_summary: scopeNode.summary };
+    }
+  }
   if (claimRows.length > 0) {
     result.your_claims = claimRows.map((r) => ({
       id: r.id,

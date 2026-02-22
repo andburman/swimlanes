@@ -1524,6 +1524,75 @@ describe("your_claims in graph_next (#6)", () => {
   });
 });
 
+// [sl:Ufz48Frf4aeXz9ztEODKE] Auto-scope graph_next to active subtree
+describe("auto-scope graph_next", () => {
+  it("auto-scopes to parent of most recent claim", () => {
+    const { root } = openProject("autoscope", "Test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "phase1", parent_ref: root.id, summary: "Phase 1" },
+        { ref: "a", parent_ref: "phase1", summary: "Task A" },
+        { ref: "b", parent_ref: "phase1", summary: "Task B" },
+        { ref: "phase2", parent_ref: root.id, summary: "Phase 2" },
+        { ref: "c", parent_ref: "phase2", summary: "Task C" },
+      ],
+    }, AGENT);
+
+    // Claim Task A (under Phase 1)
+    const first = handleNext({ project: "autoscope", claim: true }, AGENT);
+    expect(first.nodes[0].node.summary).toBe("Task A");
+
+    // Resolve Task A
+    handleUpdate({ updates: [{ node_id: first.nodes[0].node.id, resolved: true, resolved_reason: "Done" }] }, AGENT);
+
+    // Next call should auto-scope to Phase 1 (parent of claimed Task A)
+    const second = handleNext({ project: "autoscope" }, AGENT);
+    expect(second.auto_scoped).toBeDefined();
+    expect(second.auto_scoped!.parent_summary).toBe("Phase 1");
+    // Should return Task B (same subtree), not Task C
+    expect(second.nodes).toHaveLength(1);
+    expect(second.nodes[0].node.summary).toBe("Task B");
+  });
+
+  it("explicit scope overrides auto-scope", () => {
+    const { root } = openProject("autoscope-override", "Test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "phase1", parent_ref: root.id, summary: "Phase 1" },
+        { ref: "a", parent_ref: "phase1", summary: "Task A" },
+        { ref: "phase2", parent_ref: root.id, summary: "Phase 2" },
+        { ref: "b", parent_ref: "phase2", summary: "Task B" },
+      ],
+    }, AGENT);
+    const phase2Id = plan.created.find(c => c.ref === "phase2")!.id;
+
+    // Claim Task A (under Phase 1)
+    handleNext({ project: "autoscope-override", claim: true }, AGENT);
+
+    // Explicit scope to Phase 2 should override auto-scope
+    const result = handleNext({ project: "autoscope-override", scope: phase2Id }, AGENT);
+    expect(result.auto_scoped).toBeUndefined();
+    expect(result.nodes[0].node.summary).toBe("Task B");
+  });
+
+  it("no auto-scope when agent has no active claims", () => {
+    const { root } = openProject("autoscope-none", "Test", AGENT) as any;
+    handlePlan({
+      nodes: [
+        { ref: "phase1", parent_ref: root.id, summary: "Phase 1" },
+        { ref: "a", parent_ref: "phase1", summary: "Task A" },
+        { ref: "phase2", parent_ref: root.id, summary: "Phase 2" },
+        { ref: "b", parent_ref: "phase2", summary: "Task B" },
+      ],
+    }, AGENT);
+
+    // No claims — should return all actionable (no auto-scope)
+    const result = handleNext({ project: "autoscope-none" }, AGENT);
+    expect(result.auto_scoped).toBeUndefined();
+    expect(result.nodes.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("progress summaries (#7)", () => {
   it("graph_context shows progress on parent nodes", () => {
     const { root } = openProject("prog-ctx", "Test", AGENT) as any;

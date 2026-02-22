@@ -678,10 +678,10 @@ describe("graph_onboard", () => {
     expect(result.summary.resolved).toBe(1);
     expect(result.summary.actionable).toBe(2); // task2 (unblocked), task3
 
-    // 2. Tree — should show root's direct children with their children
+    // 2. Tree — should show root's direct children with child counts
     expect(result.tree).toHaveLength(2);
     expect(result.tree[0].summary).toBe("Phase 1");
-    expect(result.tree[0].children).toHaveLength(2);
+    expect(result.tree[0].child_count).toBe(2);
     expect(result.tree[1].summary).toBe("Phase 2");
 
     // 3. Recent evidence — should include evidence from resolved task1
@@ -712,7 +712,6 @@ describe("graph_onboard", () => {
     const result = handleOnboard({ project: "test" });
     expect(result.knowledge).toHaveLength(2);
     expect(result.knowledge.map((k) => k.key).sort()).toEqual(["architecture", "conventions"]);
-    expect(result.knowledge[0].content).toBeDefined();
     expect(result.knowledge[0].updated_at).toBeDefined();
   });
 
@@ -1812,9 +1811,7 @@ describe("blocked polish", () => {
     const freeNode = onboard.tree.find((n: any) => n.summary === "Free task");
 
     expect(blockedNode.blocked).toBe(true);
-    expect(blockedNode.blocked_reason).toBe("Needs review");
     expect(freeNode.blocked).toBe(false);
-    expect(freeNode.blocked_reason).toBeNull();
   });
 
   it("blocked + dependency interaction: manually blocked takes precedence", () => {
@@ -2603,7 +2600,7 @@ describe("integrity audit", () => {
     const onboard = handleOnboard({ project: "integrity-onboard" }) as any;
     expect(onboard.integrity).toBeDefined();
     expect(onboard.integrity.score).toBeDefined();
-    expect(onboard.integrity.issues).toBeDefined();
+    expect(onboard.integrity.issue_count).toBeDefined();
   });
 
   it("surfaces in graph_status formatted output", () => {
@@ -2802,8 +2799,7 @@ describe("onboard UX improvements", () => {
     const blockerCheck = result.checklist.find((c: any) => c.check === "confirm_blockers");
     expect(blockerCheck).toBeDefined();
     expect(blockerCheck.status).toBe("action_required");
-    expect(blockerCheck.action).toBeDefined();
-    expect(blockerCheck.action).toContain("unblock");
+    expect(blockerCheck.message).toContain("blocked");
   });
 });
 
@@ -2955,7 +2951,7 @@ describe("verification checkpoints", () => {
     const check = result.checklist.find((c: any) => c.check === "check_pending_verification");
     expect(check).toBeDefined();
     expect(check.status).toBe("action_required");
-    expect(check.action).toContain("_needs_verification");
+    expect(check.message).toContain("verification");
   });
 
   it("passes onboard checklist when no verification pending", () => {

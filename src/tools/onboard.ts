@@ -3,7 +3,7 @@ import { getProjectRoot, getProjectSummary, listProjects } from "../nodes.js";
 import { optionalString, optionalNumber } from "../validate.js";
 import { EngineError } from "../validate.js";
 import { computeContinuityConfidence, type ContinuityConfidence } from "../continuity.js";
-import { computeIntegrity, type IntegrityResult } from "../integrity.js";
+import { computeIntegrity } from "../integrity.js";
 import type { NodeRow, Evidence } from "../types.js";
 
 // [sl:yosc4NuV6j43Zv0fsDXDj] graph_onboard — single-call orientation for new agents
@@ -38,15 +38,8 @@ export interface OnboardResult {
     summary: string;
     resolved: boolean;
     blocked: boolean;
-    blocked_reason: string | null;
-    children: Array<{
-      id: string;
-      summary: string;
-      resolved: boolean;
-      blocked: boolean;
-      blocked_reason: string | null;
-      child_count: number;
-    }>;
+    child_count: number;
+    resolved_children: number;
   }>;
   recent_evidence: Array<{
     node_id: string;
@@ -59,7 +52,6 @@ export interface OnboardResult {
   context_links: string[];
   knowledge: Array<{
     key: string;
-    content: string;
     updated_at: string;
   }>;
   recently_resolved: Array<{
@@ -70,11 +62,15 @@ export interface OnboardResult {
   }>;
   last_activity: string | null;
   continuity_confidence: ContinuityConfidence;
-  integrity: IntegrityResult;
+  integrity: {
+    score: number;
+    issue_count: number;
+    quality_kpi: { high_quality: number; resolved: number; percentage: number };
+  };
   actionable: Array<{
     id: string;
     summary: string;
-    properties: Record<string, unknown>;
+    priority: number | null;
   }>;
   // [sl:Mox85EgzSfvuXq-JhMFwW] Recommended next task with rationale
   recommended_next?: {
@@ -95,7 +91,7 @@ export interface OnboardResult {
     claimed_by: string;
     age_hours: number;
   }>;
-  checklist: ChecklistItem[];
+  checklist: Array<{ check: string; status: string; message: string }>;
 }
 
 function computeChecklist(
@@ -242,46 +238,36 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
   // 1. Project summary counts
   const summary = getProjectSummary(project);
 
-  // 2. Tree structure — root's children + their children (depth 1-2)
+  // 2. Tree structure — root's direct children only (depth 1), with child counts
   const topChildren = db
-    .prepare("SELECT * FROM nodes WHERE parent = ? ORDER BY created_at ASC")
-    .all(root.id) as NodeRow[];
+    .prepare(
+      `SELECT n.id, n.summary, n.resolved, n.blocked, n.blocked_reason, n.discovery,
+       (SELECT COUNT(*) FROM nodes c WHERE c.parent = n.id) as child_count,
+       (SELECT COUNT(*) FROM nodes c WHERE c.parent = n.id AND c.resolved = 1) as resolved_children
+       FROM nodes n WHERE n.parent = ? ORDER BY n.created_at ASC`
+    )
+    .all(root.id) as Array<{
+    id: string;
+    summary: string;
+    resolved: number;
+    blocked: number;
+    blocked_reason: string | null;
+    discovery: string | null;
+    child_count: number;
+    resolved_children: number;
+  }>;
 
-  const tree = topChildren.map((child) => {
-    const grandchildren = db
-      .prepare(
-        `SELECT id, summary, resolved, blocked, blocked_reason,
-         (SELECT COUNT(*) FROM nodes gc WHERE gc.parent = n.id) as child_count
-         FROM nodes n WHERE parent = ? ORDER BY created_at ASC`
-      )
-      .all(child.id) as Array<{
-      id: string;
-      summary: string;
-      resolved: number;
-      blocked: number;
-      blocked_reason: string | null;
-      child_count: number;
-    }>;
+  const tree = topChildren.map((child) => ({
+    id: child.id,
+    summary: child.summary,
+    resolved: child.resolved === 1,
+    blocked: child.blocked === 1,
+    child_count: child.child_count,
+    resolved_children: child.resolved_children,
+  }));
 
-    return {
-      id: child.id,
-      summary: child.summary,
-      resolved: child.resolved === 1,
-      discovery: child.discovery,
-      blocked: child.blocked === 1,
-      blocked_reason: child.blocked_reason,
-      children: grandchildren.map((gc) => ({
-        id: gc.id,
-        summary: gc.summary,
-        resolved: gc.resolved === 1,
-        blocked: gc.blocked === 1,
-        blocked_reason: gc.blocked_reason,
-        child_count: gc.child_count,
-      })),
-    };
-  });
-
-  // 3. Recent evidence across all resolved nodes, sorted by timestamp
+  // 3. Recent evidence — last 10 entries, ref truncated to 120 chars
+  const effectiveLimit = Math.min(evidenceLimit, 10);
   const allNodes = db
     .prepare("SELECT id, summary, evidence FROM nodes WHERE project = ? AND resolved = 1 AND evidence != '[]'")
     .all(project) as Array<{ id: string; summary: string; evidence: string }>;
@@ -294,14 +280,14 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
         node_id: node.id,
         node_summary: node.summary,
         type: ev.type,
-        ref: ev.ref,
+        ref: ev.ref.length > 120 ? ev.ref.slice(0, 120) + "..." : ev.ref,
         agent: ev.agent,
         timestamp: ev.timestamp,
       });
     }
   }
   allEvidence.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-  const recent_evidence = allEvidence.slice(0, evidenceLimit);
+  const recent_evidence = allEvidence.slice(0, effectiveLimit);
 
   // 4. All context_links aggregated and deduplicated
   const linkRows = db
@@ -315,12 +301,12 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
       linkSet.add(link);
     }
   }
-  const context_links = [...linkSet].sort();
+  const context_links = [...linkSet].sort().slice(0, 30);
 
-  // 5. Knowledge entries
+  // 5. Knowledge entries — keys only (use graph_knowledge_read for content)
   const knowledgeRows = db
-    .prepare("SELECT key, content, updated_at FROM knowledge WHERE project = ? ORDER BY updated_at DESC")
-    .all(project) as Array<{ key: string; content: string; updated_at: string }>;
+    .prepare("SELECT key, updated_at FROM knowledge WHERE project = ? ORDER BY updated_at DESC")
+    .all(project) as Array<{ key: string; updated_at: string }>;
 
   // 6. Actionable tasks preview (like graph_next without claiming)
   const actionableRows = db
@@ -343,11 +329,14 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
     )
     .all(project) as Array<{ id: string; summary: string; properties: string }>;
 
-  const actionable = actionableRows.map((row) => ({
-    id: row.id,
-    summary: row.summary,
-    properties: JSON.parse(row.properties),
-  }));
+  const actionable = actionableRows.map((row) => {
+    const props = JSON.parse(row.properties);
+    return {
+      id: row.id,
+      summary: row.summary,
+      priority: props.priority ?? null,
+    };
+  });
 
   // 7. Recently resolved nodes (last 24h) — cross-session continuity
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -381,7 +370,8 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
       `SELECT id, summary, blocked_reason, updated_at
        FROM nodes
        WHERE project = ? AND parent IS NOT NULL AND resolved = 0 AND blocked = 1
-       ORDER BY updated_at ASC`
+       ORDER BY updated_at ASC
+       LIMIT 5`
     )
     .all(project) as Array<{ id: string; summary: string; blocked_reason: string | null; updated_at: string }>;
 
@@ -402,7 +392,8 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
        FROM nodes
        WHERE project = ? AND parent IS NOT NULL AND resolved = 0
        AND json_extract(properties, '$._claimed_by') IS NOT NULL
-       ORDER BY json_extract(properties, '$._claimed_at') ASC`
+       ORDER BY json_extract(properties, '$._claimed_at') ASC
+       LIMIT 5`
     )
     .all(project) as Array<{ id: string; summary: string; claimed_by: string; claimed_at: string }>;
 
@@ -431,11 +422,17 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
   // 9. Continuity confidence signal
   const continuity_confidence = computeContinuityConfidence(project);
 
-  // 10. Integrity audit — per-node data quality issues
-  const integrity = computeIntegrity(project);
+  // 10. Integrity audit — summary only (use graph_status for full issues)
+  const fullIntegrity = computeIntegrity(project);
+  const integrity = {
+    score: fullIntegrity.score,
+    issue_count: fullIntegrity.issues.length,
+    quality_kpi: fullIntegrity.quality_kpi,
+  };
 
-  // 11. Rehydrate checklist
-  const checklist = computeChecklist(summary, recent_evidence, knowledgeRows, actionable, blocked_nodes, claimed_nodes, db, project);
+  // 11. Rehydrate checklist — strip action strings to save tokens (agents use graph_status for details)
+  const fullChecklist = computeChecklist(summary, recent_evidence, knowledgeRows, actionable, blocked_nodes, claimed_nodes, db, project);
+  const checklist = fullChecklist.map(({ check, status, message }) => ({ check, status, message }));
 
   // Strict mode: prepend hint warning when action items exist
   if (strict && checklist.some((c) => c.status === "action_required")) {
@@ -447,13 +444,10 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
   let recommended_next: OnboardResult["recommended_next"];
   if (actionable.length > 0) {
     const top = actionable[0];
-    const props = top.properties;
     const parts: string[] = [];
-    if (props.priority) parts.push(`priority ${props.priority}`);
-    if (claimed_nodes.length === 0) parts.push("no stale claims");
-    else parts.push(`${claimed_nodes.length} stale claim(s) — consider resolving first`);
-    if (blocked_nodes.length === 0) parts.push("no blockers");
-    parts.push("highest ranked by priority/depth/staleness");
+    if (top.priority) parts.push(`priority ${top.priority}`);
+    if (claimed_nodes.length > 0) parts.push(`${claimed_nodes.length} stale claim(s)`);
+    parts.push("top-ranked");
     recommended_next = {
       id: top.id,
       summary: top.summary,

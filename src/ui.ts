@@ -3,11 +3,11 @@
 
 import { createServer, type ServerResponse } from "node:http";
 import { exec } from "node:child_process";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { homedir } from "os";
 import Database from "better-sqlite3";
-import { resolveDbPath } from "./db.js";
 
 type Db = Database.Database;
 
@@ -130,6 +130,81 @@ function apiProjectTree(db: Db, project: string, res: ServerResponse): void {
     nodes,
     edges,
     stats: { total: counts.total, resolved: counts.resolved, unresolved: counts.total - counts.resolved },
+  });
+}
+
+function apiTree(db: Db, res: ServerResponse): void {
+  const rows = db.prepare(
+    `SELECT id, parent, project, summary, resolved, depth, discovery, blocked, blocked_reason,
+            properties, context_links, evidence, created_at, updated_at
+     FROM nodes ORDER BY depth ASC, created_at ASC`
+  ).all() as Array<{
+    id: string; parent: string | null; project: string; summary: string; resolved: number;
+    depth: number; discovery: string | null; blocked: number; blocked_reason: string | null;
+    properties: string; context_links: string; evidence: string;
+    created_at: string; updated_at: string;
+  }>;
+
+  const now = new Date().toISOString();
+  const nodes: unknown[] = [{
+    id: '__root__', parent: null, summary: 'Graph', resolved: false, depth: -1,
+    discovery: null, blocked: false, blocked_reason: null,
+    properties: {}, context_links: [], evidence: [],
+    created_at: now, updated_at: now,
+  }];
+
+  for (const r of rows) {
+    nodes.push({
+      id: r.id,
+      parent: r.parent === null ? '__root__' : r.parent,
+      summary: r.summary,
+      resolved: r.resolved === 1,
+      depth: r.depth,
+      discovery: r.discovery,
+      blocked: r.blocked === 1,
+      blocked_reason: r.blocked_reason,
+      properties: parseJsonField(r.properties),
+      context_links: parseJsonField(r.context_links),
+      evidence: parseJsonField(r.evidence),
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+      _project: r.project,
+    });
+  }
+
+  const edges = db.prepare(
+    "SELECT from_node, to_node, type FROM edges"
+  ).all() as Array<{ from_node: string; to_node: string; type: string }>;
+
+  const total = rows.length;
+  const resolved = rows.filter(r => r.resolved === 1).length;
+
+  const blocked = (db.prepare(
+    `SELECT COUNT(DISTINCT id) as cnt FROM (
+       SELECT n.id FROM nodes n WHERE n.resolved = 0 AND n.blocked = 1
+       UNION
+       SELECT n.id FROM nodes n
+       JOIN edges e ON e.from_node = n.id AND e.type = 'depends_on'
+       JOIN nodes dep ON dep.id = e.to_node AND dep.resolved = 0
+       WHERE n.resolved = 0
+     )`
+  ).get() as { cnt: number }).cnt;
+
+  const actionable = (db.prepare(
+    `SELECT COUNT(*) as cnt FROM nodes n
+     WHERE n.resolved = 0 AND n.blocked = 0
+     AND NOT EXISTS (SELECT 1 FROM nodes c WHERE c.parent = n.id AND c.resolved = 0)
+     AND NOT EXISTS (
+       SELECT 1 FROM edges e JOIN nodes dep ON dep.id = e.to_node AND dep.resolved = 0
+       WHERE e.from_node = n.id AND e.type = 'depends_on'
+     )`
+  ).get() as { cnt: number }).cnt;
+
+  json(res, {
+    root_id: '__root__',
+    nodes,
+    edges,
+    stats: { total, resolved, unresolved: total - resolved, blocked, actionable },
   });
 }
 
@@ -300,6 +375,110 @@ function apiProjectOnboard(db: Db, project: string, res: ServerResponse): void {
   });
 }
 
+function apiOnboard(db: Db, res: ServerResponse): void {
+  const counts = db.prepare(
+    `SELECT COUNT(*) as total,
+            SUM(CASE WHEN resolved = 1 THEN 1 ELSE 0 END) as resolved
+     FROM nodes`
+  ).get() as { total: number; resolved: number };
+
+  const blocked = (db.prepare(
+    `SELECT COUNT(DISTINCT id) as cnt FROM (
+       SELECT n.id FROM nodes n WHERE n.resolved = 0 AND n.blocked = 1
+       UNION
+       SELECT n.id FROM nodes n
+       JOIN edges e ON e.from_node = n.id AND e.type = 'depends_on'
+       JOIN nodes dep ON dep.id = e.to_node AND dep.resolved = 0
+       WHERE n.resolved = 0
+     )`
+  ).get() as { cnt: number }).cnt;
+
+  const actionableCount = (db.prepare(
+    `SELECT COUNT(*) as cnt FROM nodes n
+     WHERE n.resolved = 0 AND n.blocked = 0
+     AND NOT EXISTS (SELECT 1 FROM nodes c WHERE c.parent = n.id AND c.resolved = 0)
+     AND NOT EXISTS (
+       SELECT 1 FROM edges e JOIN nodes dep ON dep.id = e.to_node AND dep.resolved = 0
+       WHERE e.from_node = n.id AND e.type = 'depends_on'
+     )`
+  ).get() as { cnt: number }).cnt;
+
+  const lastActivity = (db.prepare(
+    "SELECT MAX(updated_at) as last FROM nodes"
+  ).get() as { last: string | null }).last;
+
+  const rootCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM nodes WHERE parent IS NULL"
+  ).get() as { cnt: number }).cnt;
+  const totalNonRoot = counts.total - rootCount;
+  const resolvedCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM nodes WHERE parent IS NOT NULL AND resolved = 1"
+  ).get() as { cnt: number }).cnt;
+  const resolvedWithEvidence = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM nodes WHERE parent IS NOT NULL AND resolved = 1 AND evidence != '[]'"
+  ).get() as { cnt: number }).cnt;
+  const knowledgeCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM knowledge"
+  ).get() as { cnt: number }).cnt;
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const staleBlockedCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM nodes WHERE parent IS NOT NULL AND resolved = 0 AND blocked = 1 AND updated_at < ?"
+  ).get(sevenDaysAgo) as { cnt: number }).cnt;
+
+  let score = 100;
+  const reasons: string[] = [];
+  if (totalNonRoot === 0) {
+    score -= 10;
+    reasons.push("Empty project");
+  } else {
+    const coverage = resolvedCount > 0 ? resolvedWithEvidence / resolvedCount : 1;
+    if (coverage < 0.5) { score -= 40; reasons.push("Low evidence coverage"); }
+    else if (coverage < 0.8) { score -= 20; reasons.push("Moderate evidence coverage"); }
+    else if (coverage < 1) { score -= 10; }
+  }
+  if (lastActivity) {
+    const daysSince = (Date.now() - new Date(lastActivity).getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSince >= 14) { score -= 25; reasons.push("No activity for 14+ days"); }
+    else if (daysSince >= 7) { score -= 15; reasons.push("No activity for 7+ days"); }
+    else if (daysSince >= 3) { score -= 5; }
+  }
+  if (resolvedCount >= 5 && knowledgeCount === 0) {
+    score -= 15; reasons.push("No knowledge entries");
+  }
+  if (staleBlockedCount > 0) { score -= 10; reasons.push("Stale blockers"); }
+  if (score < 0) score = 0;
+  const confidence = score >= 70 ? "high" : score >= 40 ? "medium" : "low";
+
+  const claimedUnresolved = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM nodes WHERE parent IS NOT NULL AND resolved = 0 AND json_extract(properties, '$._claimed_by') IS NOT NULL"
+  ).get() as { cnt: number }).cnt;
+  const staleUnresolved = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM nodes WHERE parent IS NOT NULL AND resolved = 0 AND updated_at < ?"
+  ).get(sevenDaysAgo) as { cnt: number }).cnt;
+
+  let checkPass = 0, checkWarn = 0, checkAction = 0;
+  if (resolvedCount === 0 || resolvedWithEvidence / resolvedCount >= 0.8) checkPass++; else if (resolvedWithEvidence / resolvedCount >= 0.5) checkWarn++; else checkAction++;
+  if (resolvedCount < 5 || knowledgeCount > 0) checkPass++; else checkAction++;
+  if (staleBlockedCount === 0) checkPass++; else checkAction++;
+  if (staleUnresolved === 0) checkPass++; else checkWarn++;
+  if (claimedUnresolved === 0) checkPass++; else checkAction++;
+  if (actionableCount > 0) checkPass++; else checkWarn++;
+
+  json(res, {
+    goal: 'Graph',
+    summary: {
+      total: counts.total,
+      resolved: counts.resolved,
+      unresolved: counts.total - counts.resolved,
+      blocked,
+      actionable: actionableCount,
+    },
+    continuity: { score, confidence, reasons },
+    checklist: { pass: checkPass, warn: checkWarn, action: checkAction },
+    last_activity: lastActivity,
+  });
+}
+
 // [sl:po3iXlhOhpAtSgZKtRIuj] Node history endpoint for detail sidebar
 function apiNodeHistory(db: Db, nodeId: string, res: ServerResponse): void {
   const node = db.prepare("SELECT id FROM nodes WHERE id = ?").get(nodeId) as { id: string } | undefined;
@@ -377,19 +556,6 @@ const HTML = `<!DOCTYPE html>
       letter-spacing: 0.5px;
       white-space: nowrap;
     }
-    #project-select {
-      background: var(--elevated);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 4px 8px;
-      font-size: 13px;
-      font-family: inherit;
-      cursor: pointer;
-      max-width: 200px;
-    }
-    #project-select:focus { outline: 1px solid var(--accent); }
-
     /* Progress */
     .progress-wrap {
       display: flex;
@@ -541,6 +707,7 @@ const HTML = `<!DOCTYPE html>
     .node-label { font-size: 11px; }
     .node-label.dim { opacity: 0.5; }
     .node-label.root-label { font-size: 12px; font-weight: 600; }
+    .node-label.project-root-label { font-size: 12px; font-weight: 600; }
     .node-glow { filter: drop-shadow(0 0 4px #4a9eff); }
     @keyframes npulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
     .node-pulse { animation: npulse 2.5s ease-in-out infinite; }
@@ -1047,7 +1214,6 @@ const HTML = `<!DOCTYPE html>
 <body>
   <header>
     <div class="logo">&#x25C9; GRAPH</div>
-    <select id="project-select"></select>
     <div class="progress-wrap" id="progress-wrap" style="display:none">
       <div class="progress-track">
         <div class="progress-fill" id="progress-fill"></div>
@@ -1106,74 +1272,48 @@ const HTML = `<!DOCTYPE html>
   <script>
     // [sl:GhIqTXRAxcDr-d_fKBA15] Progressive disclosure state
     // [sl:bcrCbXmkHz31A09oiHHGa] Filter controls state
-    var G = { projects: [], project: null, tree: null, onboard: null, statuses: null,
+    var G = { projects: [], tree: null, onboard: null, statuses: null,
               expanded: {}, focusRoot: null, maxDepth: 2,
               filters: { resolved: true, deps: true, actionable: false, blocked: false, claimed: false },
               timeFilter: null, timeRange: null };
 
-    function init() {
-      fetch('/api/projects')
-        .then(function(r) { return r.json(); })
-        .then(function(projects) {
-          G.projects = projects;
-          if (projects.length === 0) {
-            showEmpty();
-            return;
-          }
-          renderProjectSelect(projects);
-          loadProject(projects[0].project);
-        })
-        .catch(function() {
-          document.getElementById('canvas').innerHTML =
-            '<div class="placeholder"><p class="error">Failed to connect to server</p></div>';
-        });
-    }
-
-    function loadProject(name) {
-      G.project = name;
-      var sel = document.getElementById('project-select');
-      if (sel.value !== name) sel.value = name;
-      document.getElementById('canvas').innerHTML =
-        '<div class="placeholder"><p class="loading">Loading\\u2026</p></div>';
-
+    function loadGraph() {
       Promise.all([
-        fetch('/api/projects/' + encodeURIComponent(name) + '/tree').then(function(r) { return r.json(); }),
-        fetch('/api/projects/' + encodeURIComponent(name) + '/onboard').then(function(r) { return r.json(); })
+        fetch('/api/tree').then(function(r) { return r.json(); }),
+        fetch('/api/onboard').then(function(r) { return r.json(); }),
+        fetch('/api/projects').then(function(r) { return r.json(); })
       ]).then(function(results) {
         G.tree = results[0];
         G.onboard = results[1];
+        G.projects = results[2];
         G.focusRoot = null;
-        /* Auto-expand nodes to maxDepth */
-        G.expanded = {};
+        if (!G.tree.nodes || G.tree.nodes.length <= 1) {
+          showEmpty();
+          return;
+        }
+        /* Auto-expand: __root__ + project roots + nodes up to maxDepth */
+        G.expanded = { '__root__': true };
         G.tree.nodes.forEach(function(n) {
-          if (n.depth < G.maxDepth) G.expanded[n.id] = true;
+          if (n.parent === '__root__' || n.depth < G.maxDepth) G.expanded[n.id] = true;
         });
-        document.title = 'Graph \\u2014 ' + name;
+        document.title = 'Graph';
         document.getElementById('kb-btn').style.display = '';
         showFilterBar();
         renderHeader();
         renderCanvas();
+      }).catch(function() {
+        document.getElementById('canvas').innerHTML =
+          '<div class="placeholder"><p class="error">Failed to connect to server</p></div>';
       });
-    }
-
-    function renderProjectSelect(projects) {
-      var sel = document.getElementById('project-select');
-      sel.innerHTML = '';
-      projects.forEach(function(p) {
-        var opt = document.createElement('option');
-        opt.value = p.project;
-        opt.textContent = p.project;
-        sel.appendChild(opt);
-      });
-      sel.onchange = function() { loadProject(sel.value); };
     }
 
     function renderHeader() {
       var s = G.onboard.summary;
-      /* Exclude root node from progress — matches graph_status behavior */
-      var root = G.tree.nodes.find(function(n) { return n.parent === null; });
-      var total = s.total - 1;
-      var resolved = s.resolved - (root && root.resolved ? 1 : 0);
+      /* Exclude project root nodes from progress — matches graph_status behavior */
+      var projRoots = G.tree.nodes.filter(function(n) { return n.parent === '__root__'; });
+      var rootResolved = projRoots.filter(function(n) { return n.resolved; }).length;
+      var total = s.total - projRoots.length;
+      var resolved = s.resolved - rootResolved;
       var pct = total > 0 ? Math.round(resolved / total * 100) : 0;
       if (pct > 100) pct = 100;
 
@@ -1457,7 +1597,11 @@ const HTML = `<!DOCTYPE html>
         });
 
       node.append('circle')
-        .attr('r', function(d) { return d.depth === 0 ? 7 : (d.children ? 5 : 3.5); })
+        .attr('r', function(d) {
+          if (d.depth === 0) return 7;
+          if (d.data.parent === '__root__') return 6;
+          return d.children ? 5 : 3.5;
+        })
         .attr('fill', function(d) { return STATUS_COLORS[statuses[d.data.id]] || '#44445a'; })
         .attr('class', function(d) {
           var s = statuses[d.data.id];
@@ -1482,7 +1626,7 @@ const HTML = `<!DOCTYPE html>
       node.each(function(d) {
         if (!hasCollapsedChildren(d.data.id)) return;
         var sel = d3.select(this);
-        var r = d.depth === 0 ? 7 : (d.children ? 5 : 3.5);
+        var r = d.depth === 0 ? 7 : d.data.parent === '__root__' ? 6 : (d.children ? 5 : 3.5);
         sel.append('circle')
           .attr('class', 'collapse-ring')
           .attr('r', r + 5);
@@ -1501,6 +1645,7 @@ const HTML = `<!DOCTYPE html>
           var c = 'node-label';
           if (statuses[d.data.id] === 'resolved') c += ' dim';
           if (d.depth === 0) c += ' root-label';
+          else if (d.data.parent === '__root__') c += ' project-root-label';
           return c;
         })
         .attr('dy', function(d) { return d.depth === 0 ? '-14' : '0.31em'; })
@@ -1603,7 +1748,7 @@ const HTML = `<!DOCTYPE html>
     }
 
     function drillTo(nodeId) {
-      G.focusRoot = nodeId === G.tree.root_id ? null : nodeId;
+      G.focusRoot = (nodeId === G.tree.root_id || nodeId === '__root__') ? null : nodeId;
       expandToNode(nodeId);
       renderCanvas();
       /* Focus the node */
@@ -1682,6 +1827,12 @@ const HTML = `<!DOCTYPE html>
       /* Claimed by */
       if (n.properties && n.properties._claimed_by) {
         html += '<div class="sb-claim">Claimed by ' + esc(n.properties._claimed_by) + '</div>';
+      }
+
+      /* Project overview for project root nodes */
+      if (n.parent === '__root__' && n._project) {
+        html += '<div class="sb-section"><div class="sb-section-title">Project Overview</div>' +
+          '<div id="sb-project-onboard"><span class="loading">Loading&hellip;</span></div></div>';
       }
 
       /* Dependencies */
@@ -1774,6 +1925,33 @@ const HTML = `<!DOCTYPE html>
 
       openSidebar(truncLabel(n.summary, 40), html);
 
+      /* Fetch project onboard for project roots */
+      if (n.parent === '__root__' && n._project) {
+        fetch('/api/projects/' + encodeURIComponent(n._project) + '/onboard')
+          .then(function(r) { return r.json(); })
+          .then(function(ob) {
+            var el = document.getElementById('sb-project-onboard');
+            if (!el) return;
+            var pTotal = ob.summary.total - 1;
+            var pResolved = ob.summary.resolved - (n.resolved ? 1 : 0);
+            var pPct = pTotal > 0 ? Math.round(pResolved / pTotal * 100) : 0;
+            var h = '<div style="margin-bottom:8px">' + pResolved + '/' + pTotal + ' resolved (' + pPct + '%)</div>';
+            h += '<div style="margin-bottom:4px"><span style="color:var(--accent)">' + ob.summary.actionable + '</span> actionable, <span style="color:var(--red)">' + ob.summary.blocked + '</span> blocked</div>';
+            if (ob.continuity) {
+              h += '<div class="confidence-badge ' + ob.continuity.confidence + '" style="display:inline-flex;margin:6px 0">' +
+                confidenceBars(ob.continuity.score) + ' ' + ob.continuity.confidence + ' (' + ob.continuity.score + ')</div>';
+            }
+            if (ob.last_activity) {
+              h += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px">Last activity: ' + timeAgo(ob.last_activity) + '</div>';
+            }
+            el.innerHTML = h;
+          })
+          .catch(function() {
+            var el = document.getElementById('sb-project-onboard');
+            if (el) el.innerHTML = '<span class="error">Failed to load</span>';
+          });
+      }
+
       /* Fetch audit history */
       fetch('/api/nodes/' + encodeURIComponent(n.id) + '/history')
         .then(function(r) { return r.json(); })
@@ -1839,7 +2017,6 @@ const HTML = `<!DOCTYPE html>
     });
 
     function showEmpty() {
-      document.getElementById('project-select').style.display = 'none';
       document.getElementById('canvas').innerHTML =
         '<div class="placeholder"><h2>No projects yet</h2>' +
         '<p>Create a project with graph_open to get started</p></div>';
@@ -2106,31 +2283,48 @@ const HTML = `<!DOCTYPE html>
 
     /* [sl:1d5O6Zu7PP0v_hPVXQh0i] Knowledge entries view */
     function showKnowledge() {
-      if (!G.project) return;
       openSidebar('Knowledge', '<span class="loading">Loading\\u2026</span>');
-      fetch('/api/projects/' + encodeURIComponent(G.project) + '/knowledge')
-        .then(function(r) { return r.json(); })
-        .then(function(entries) {
-          G._knowledgeEntries = entries;
-          if (entries.length === 0) {
-            document.getElementById('sidebar-body').innerHTML =
-              '<div style="color:var(--text-muted);font-size:12px">No knowledge entries yet</div>';
-            return;
-          }
-          var html = '';
-          entries.forEach(function(e, i) {
-            html += '<div class="kb-entry" onclick="showKnowledgeEntry('+i+')">' +
-              '<div class="kb-key">' + esc(e.key) + '</div>' +
-              '<div class="kb-preview">' + esc(e.content.substring(0, 200)) + '</div>' +
-              '<div class="kb-meta">' + esc(e.created_by) + ' &middot; ' + timeAgo(e.updated_at) + '</div>' +
-              '</div>';
+      var projects = G.projects || [];
+      if (projects.length === 0) {
+        document.getElementById('sidebar-body').innerHTML =
+          '<div style="color:var(--text-muted);font-size:12px">No knowledge entries</div>';
+        return;
+      }
+      Promise.all(projects.map(function(p) {
+        return fetch('/api/projects/' + encodeURIComponent(p.project) + '/knowledge')
+          .then(function(r) { return r.json(); })
+          .then(function(entries) { return { project: p.project, entries: entries }; });
+      })).then(function(results) {
+        var allEntries = [];
+        results.forEach(function(r) {
+          r.entries.forEach(function(e) {
+            allEntries.push({ project: r.project, key: e.key, content: e.content, created_by: e.created_by, updated_at: e.updated_at });
           });
-          document.getElementById('sidebar-body').innerHTML = html;
-        })
-        .catch(function() {
-          document.getElementById('sidebar-body').innerHTML =
-            '<span class="error">Failed to load knowledge</span>';
         });
+        G._knowledgeEntries = allEntries;
+        if (allEntries.length === 0) {
+          document.getElementById('sidebar-body').innerHTML =
+            '<div style="color:var(--text-muted);font-size:12px">No knowledge entries yet</div>';
+          return;
+        }
+        var html = '';
+        var curProject = null;
+        allEntries.forEach(function(e, i) {
+          if (e.project !== curProject) {
+            curProject = e.project;
+            html += '<div style="font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:12px 0 6px;padding-top:8px;border-top:1px solid var(--border)">' + esc(e.project) + '</div>';
+          }
+          html += '<div class="kb-entry" onclick="showKnowledgeEntry('+i+')">' +
+            '<div class="kb-key">' + esc(e.key) + '</div>' +
+            '<div class="kb-preview">' + esc(e.content.substring(0, 200)) + '</div>' +
+            '<div class="kb-meta">' + esc(e.created_by) + ' &middot; ' + timeAgo(e.updated_at) + '</div>' +
+            '</div>';
+        });
+        document.getElementById('sidebar-body').innerHTML = html;
+      }).catch(function() {
+        document.getElementById('sidebar-body').innerHTML =
+          '<span class="error">Failed to load knowledge</span>';
+      });
     }
 
     function showKnowledgeEntry(index) {
@@ -2138,7 +2332,8 @@ const HTML = `<!DOCTYPE html>
       if (!e) return;
       var html = '<button class="kb-back" onclick="showKnowledge()">\\u2190 All entries</button>' +
         '<div class="kb-key" style="margin-bottom:8px">' + esc(e.key) + '</div>' +
-        '<div class="kb-meta" style="margin-bottom:12px">' + esc(e.created_by) + ' &middot; ' + formatTime(e.updated_at) + '</div>' +
+        '<div class="kb-meta" style="margin-bottom:12px">' + esc(e.created_by || '') + ' &middot; ' + formatTime(e.updated_at) +
+        (e.project ? ' &middot; ' + esc(e.project) : '') + '</div>' +
         '<div class="kb-content">' + esc(e.content) + '</div>';
       document.getElementById('sidebar-title').textContent = e.key;
       document.getElementById('sidebar-body').innerHTML = html;
@@ -2148,7 +2343,6 @@ const HTML = `<!DOCTYPE html>
     window.G = G;
     window.openSidebar = openSidebar;
     window.closeSidebar = closeSidebar;
-    window.loadProject = loadProject;
     window.clickChildNode = clickChildNode;
     window.toggleExpand = toggleExpand;
     window.drillTo = drillTo;
@@ -2161,7 +2355,7 @@ const HTML = `<!DOCTYPE html>
     loadFiltersFromURL();
     initTimeline();
     initSearch();
-    init();
+    loadGraph();
   </script>
 </body>
 </html>`;
@@ -2172,6 +2366,47 @@ function openBrowser(url: string): void {
     process.platform === "win32" ? "start" :
     "xdg-open";
   exec(`${cmd} ${url}`);
+}
+
+function discoverDbs(): string[] {
+  if (process.env.GRAPH_DB) {
+    return existsSync(process.env.GRAPH_DB) ? [process.env.GRAPH_DB] : [];
+  }
+  const baseDir = join(homedir(), ".graph", "db");
+  if (!existsSync(baseDir)) return [];
+  const paths: string[] = [];
+  for (const entry of readdirSync(baseDir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      const dbFile = join(baseDir, entry.name, "graph.db");
+      if (existsSync(dbFile)) paths.push(dbFile);
+    }
+  }
+  return paths;
+}
+
+function openMergedDb(dbPaths: string[]): Db {
+  if (dbPaths.length === 1) {
+    return new Database(dbPaths[0], { readonly: true });
+  }
+  const mem = new Database(":memory:");
+  mem.pragma("foreign_keys = OFF");
+  for (let i = 0; i < dbPaths.length; i++) {
+    const escaped = dbPaths[i].replace(/'/g, "''");
+    mem.exec(`ATTACH DATABASE '${escaped}' AS src`);
+    if (i === 0) {
+      for (const table of ["nodes", "edges", "events", "knowledge"]) {
+        const row = mem.prepare(
+          "SELECT sql FROM src.sqlite_master WHERE type='table' AND name=?"
+        ).get(table) as { sql: string } | undefined;
+        if (row) mem.exec(row.sql);
+      }
+    }
+    for (const table of ["nodes", "edges", "events", "knowledge"]) {
+      try { mem.exec(`INSERT OR IGNORE INTO ${table} SELECT * FROM src.${table}`); } catch {}
+    }
+    mem.exec("DETACH src");
+  }
+  return mem;
 }
 
 export function startUi(args: string[]): void {
@@ -2187,15 +2422,15 @@ export function startUi(args: string[]): void {
   }
   port = parseInt(process.env.GRAPH_UI_PORT ?? String(port), 10);
 
-  // Resolve and open DB read-only
-  const dbPath = resolveDbPath();
-  if (!existsSync(dbPath)) {
-    console.error(`No database found at ${dbPath}`);
-    console.error("Run Graph in an MCP-enabled project first to create the database.");
+  // Discover and merge all Graph databases
+  const dbPaths = discoverDbs();
+  if (dbPaths.length === 0) {
+    console.error("No Graph databases found.");
+    console.error("Run Graph in an MCP-enabled project first to create a database.");
     process.exit(1);
   }
 
-  const db = new Database(dbPath, { readonly: true });
+  const db = openMergedDb(dbPaths);
 
   const server = createServer((req, res) => {
     // CORS headers for local dev
@@ -2223,6 +2458,18 @@ export function startUi(args: string[]): void {
     // /api/projects
     if (path === "/api/projects") {
       apiProjects(db, res);
+      return;
+    }
+
+    // /api/tree — unified tree across all projects
+    if (path === "/api/tree") {
+      apiTree(db, res);
+      return;
+    }
+
+    // /api/onboard — aggregate onboard across all projects
+    if (path === "/api/onboard") {
+      apiOnboard(db, res);
       return;
     }
 
@@ -2259,7 +2506,8 @@ export function startUi(args: string[]): void {
   server.listen(port, () => {
     console.log(`\n  Graph Dashboard v${PKG_VERSION}`);
     console.log(`  http://localhost:${port}`);
-    console.log(`  Database: ${dbPath}`);
+    console.log(`  Databases: ${dbPaths.length}`);
+    for (const p of dbPaths) console.log(`    ${p}`);
     console.log(`\n  Press Ctrl+C to stop\n`);
     if (!noOpen) openBrowser(`http://localhost:${port}`);
   });

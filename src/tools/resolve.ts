@@ -1,6 +1,7 @@
 import { execSync } from "child_process";
 import { getNodeOrThrow } from "../nodes.js";
 import { handleUpdate } from "./update.js";
+import { handleKnowledgeWrite } from "./knowledge.js";
 import { requireString } from "../validate.js";
 
 // [sl:Pj4XxpNqIbtR1EoZv9jxt] One-call resolve helper — auto-collects git evidence
@@ -11,6 +12,8 @@ export interface ResolveInput {
   test_result?: string;
   commit?: string;
   context_links?: string[];
+  // [sl:g51sz-5sGTtq1AzTh-_io] Inline knowledge write — capture findings in same call
+  knowledge?: { key: string; content: string };
 }
 
 export interface ResolveResult {
@@ -24,6 +27,7 @@ export interface ResolveResult {
   };
   newly_actionable?: Array<{ id: string; summary: string }>;
   auto_resolved?: Array<{ node_id: string; summary: string }>;
+  knowledge_written?: string;
 }
 
 function tryGitCommits(since?: string, max: number = 10): Array<{ hash: string; message: string }> {
@@ -104,6 +108,18 @@ export function handleResolve(input: ResolveInput, agent: string): ResolveResult
     }]
   }, agent);
 
+  // [sl:g51sz-5sGTtq1AzTh-_io] Inline knowledge write — source_node auto-set to resolved node
+  let knowledge_written: string | undefined;
+  if (input.knowledge?.key && input.knowledge?.content) {
+    handleKnowledgeWrite({
+      project: node.project,
+      key: input.knowledge.key,
+      content: input.knowledge.content,
+      source_node: node_id,
+    }, agent);
+    knowledge_written = input.knowledge.key;
+  }
+
   return {
     node_id,
     rev: result.updated[0].rev,
@@ -115,5 +131,6 @@ export function handleResolve(input: ResolveInput, agent: string): ResolveResult
     },
     newly_actionable: result.newly_actionable,
     auto_resolved: result.auto_resolved,
+    knowledge_written,
   };
 }

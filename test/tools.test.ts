@@ -345,6 +345,34 @@ describe("graph_next", () => {
     const result = handleNext({ project: "test" }, AGENT);
     expect(result.nodes[0].plan_hint).toBeUndefined();
   });
+
+  it("surfaces relevant knowledge linked to task's subtree", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "parent", parent_ref: root.id, summary: "Parent task" },
+      { ref: "child", parent_ref: "parent", summary: "Child task" },
+    ] }, AGENT);
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+
+    // Write knowledge linked to the parent task
+    handleKnowledgeWrite({ project: "test", key: "design-notes", content: "Use dependency injection for the auth module", source_node: parentId }, AGENT);
+
+    // Claim child task — should see parent's knowledge
+    const next = handleNext({ project: "test", claim: true }, AGENT) as any;
+    expect(next.nodes[0].relevant_knowledge).toBeDefined();
+    expect(next.nodes[0].relevant_knowledge).toHaveLength(1);
+    expect(next.nodes[0].relevant_knowledge[0].key).toBe("design-notes");
+  });
+
+  it("omits relevant_knowledge when none exists", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "No knowledge task" },
+    ] }, AGENT);
+
+    const next = handleNext({ project: "test" }, AGENT) as any;
+    expect(next.nodes[0].relevant_knowledge).toBeUndefined();
+  });
 });
 
 describe("graph_context", () => {
@@ -368,6 +396,36 @@ describe("graph_context", () => {
     expect(ctx.depends_on).toHaveLength(1);
     expect(ctx.depends_on[0].node.summary).toBe("A");
     expect(ctx.depends_on[0].satisfied).toBe(false);
+  });
+
+  it("surfaces relevant knowledge linked to node's subtree", () => {
+    const { root } = openProject("ctx-kb", "Test context knowledge", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "parent", parent_ref: root.id, summary: "Parent" },
+      { ref: "child", parent_ref: "parent", summary: "Child" },
+    ] }, AGENT);
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+    const childId = plan.created.find(c => c.ref === "child")!.id;
+
+    // Write knowledge linked to parent
+    handleKnowledgeWrite({ project: "ctx-kb", key: "arch-notes", content: "Microservices with event sourcing pattern", source_node: parentId }, AGENT);
+
+    // Context on child should surface parent's knowledge
+    const ctx = handleContext({ node_id: childId }) as any;
+    expect(ctx.relevant_knowledge).toBeDefined();
+    expect(ctx.relevant_knowledge).toHaveLength(1);
+    expect(ctx.relevant_knowledge[0].key).toBe("arch-notes");
+  });
+
+  it("omits relevant_knowledge when none exists", () => {
+    const { root } = openProject("ctx-kb2", "Test no knowledge", AGENT) as any;
+    const plan = handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Lonely task" },
+    ] }, AGENT);
+    const nodeId = plan.created[0].id;
+
+    const ctx = handleContext({ node_id: nodeId }) as any;
+    expect(ctx.relevant_knowledge).toBeUndefined();
   });
 });
 
@@ -1321,6 +1379,47 @@ describe("graph_knowledge", () => {
     handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
     expect(() => handleKnowledgeDelete({ project: "kb-test", key: "nope" }))
       .toThrow("not found");
+  });
+
+  it("auto-detects source_node from agent's claimed node", () => {
+    const { root } = openProject("kb-src", "Test source_node", AGENT) as any;
+    handlePlan({ nodes: [
+      { ref: "task", parent_ref: root.id, summary: "A task" },
+    ] }, AGENT);
+    // Claim the task
+    const next = handleNext({ project: "kb-src", claim: true }, AGENT) as any;
+    const taskId = next.nodes[0].node.id;
+
+    // Write knowledge while task is claimed — source_node should auto-detect
+    handleKnowledgeWrite({ project: "kb-src", key: "finding", content: "Learned something" }, AGENT);
+    const read = handleKnowledgeRead({ project: "kb-src", key: "finding" }) as any;
+    expect(read.source_node).toBe(taskId);
+  });
+
+  it("uses explicit source_node over auto-detect", () => {
+    const { root } = openProject("kb-src2", "Test explicit source", AGENT) as any;
+    handlePlan({ nodes: [
+      { ref: "a", parent_ref: root.id, summary: "Task A" },
+      { ref: "b", parent_ref: root.id, summary: "Task B" },
+    ] }, AGENT);
+    // Claim task A
+    handleNext({ project: "kb-src2", claim: true }, AGENT);
+
+    // Get task B's ID
+    const query = handleQuery({ project: "kb-src2", filter: { text: "Task B" } }) as any;
+    const taskBId = query.nodes[0].id;
+
+    // Write knowledge with explicit source_node pointing to B
+    handleKnowledgeWrite({ project: "kb-src2", key: "explicit", content: "For task B", source_node: taskBId }, AGENT);
+    const read = handleKnowledgeRead({ project: "kb-src2", key: "explicit" }) as any;
+    expect(read.source_node).toBe(taskBId);
+  });
+
+  it("returns null source_node when no task is claimed", () => {
+    handleOpen({ project: "kb-src3", goal: "Test no claim" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-src3", key: "orphan", content: "No task context" }, AGENT);
+    const read = handleKnowledgeRead({ project: "kb-src3", key: "orphan" }) as any;
+    expect(read.source_node).toBeNull();
   });
 });
 
@@ -2628,6 +2727,27 @@ describe("graph_resolve", () => {
   it("throws without required fields", () => {
     expect(() => handleResolve({ node_id: "", message: "test" } as any, AGENT)).toThrow();
     expect(() => handleResolve({ node_id: "abc" } as any, AGENT)).toThrow();
+  });
+
+  it("writes inline knowledge with source_node on resolve", () => {
+    const { root } = openProject("resolve-kb", "Test inline knowledge", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [{ ref: "a", parent_ref: root.id, summary: "Task with findings" }],
+    }, AGENT);
+    const nodeId = plan.created[0].id;
+
+    const result = handleResolve({
+      node_id: nodeId,
+      message: "Implemented auth",
+      knowledge: { key: "auth-pattern", content: "JWT with RS256 works best for this use case" },
+    }, AGENT) as any;
+
+    expect(result.knowledge_written).toBe("auth-pattern");
+
+    // Verify knowledge was stored with source_node
+    const kb = handleKnowledgeRead({ project: "resolve-kb", key: "auth-pattern" }) as any;
+    expect(kb.content).toBe("JWT with RS256 works best for this use case");
+    expect(kb.source_node).toBe(nodeId);
   });
 });
 

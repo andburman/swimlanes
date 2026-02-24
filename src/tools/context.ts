@@ -1,6 +1,7 @@
 import { getNodeOrThrow, getChildren, getAncestors, getSubtreeProgress } from "../nodes.js";
 import { getEdgesFrom, getEdgesTo } from "../edges.js";
 import { getNode } from "../nodes.js";
+import { getDb } from "../db.js";
 import { requireString, optionalNumber } from "../validate.js";
 import type { Node } from "../types.js";
 
@@ -26,6 +27,8 @@ export interface ContextResult {
   children: NodeTree;
   depends_on: Array<{ node: Node; satisfied: boolean }>;
   depended_by: Array<{ node: Node; satisfied: boolean }>;
+  // [sl:IHJtkU6e8uSe9gRnUO6sa] Task-relevant knowledge surfacing
+  relevant_knowledge?: Array<{ key: string; excerpt: string }>;
 }
 
 function buildNodeTree(nodeId: string, currentDepth: number, maxDepth: number): NodeTree {
@@ -86,5 +89,22 @@ export function handleContext(input: ContextInput): ContextResult {
     };
   });
 
-  return { node, ancestors, children, depends_on, depended_by };
+  // [sl:IHJtkU6e8uSe9gRnUO6sa] Surface relevant knowledge linked to this node's subtree
+  const db = getDb();
+  const subtreeIds = [nodeId, ...ancestors.map(a => a.id)];
+  // Include direct children
+  const directChildren = getChildren(nodeId);
+  subtreeIds.push(...directChildren.map(c => c.id));
+  const placeholders = subtreeIds.map(() => "?").join(",");
+  const knowledgeRows = db.prepare(
+    `SELECT key, substr(content, 1, 80) as excerpt FROM knowledge
+     WHERE project = ? AND source_node IN (${placeholders})
+     ORDER BY updated_at DESC LIMIT 5`
+  ).all(node.project, ...subtreeIds) as Array<{ key: string; excerpt: string }>;
+
+  const result: ContextResult = { node, ancestors, children, depends_on, depended_by };
+  if (knowledgeRows.length > 0) {
+    result.relevant_knowledge = knowledgeRows;
+  }
+  return result;
 }

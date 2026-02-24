@@ -25,6 +25,8 @@ export interface NextResultNode {
     evidence: Evidence[];
   }>;
   plan_hint?: string;
+  // [sl:plL0G5tFvTVHiFlr1uW9P] Task-relevant knowledge surfacing
+  relevant_knowledge?: Array<{ key: string; excerpt: string }>;
 }
 
 export interface ClaimedTask {
@@ -209,6 +211,26 @@ export function handleNext(
     if (!finalNode.plan) {
       resultNode.plan_hint = `Before coding, record your plan: graph_update({ updates: [{ node_id: "${finalNode.id}", plan: ["Step 1: ...", "Step 2: ..."] }] })`;
     }
+
+    // [sl:plL0G5tFvTVHiFlr1uW9P] Surface relevant knowledge linked to this task's subtree
+    const subtreeIds = [row.id, ...ancestors.map(a => a.id)];
+    // Include siblings (other children of same parent)
+    if (row.parent) {
+      const siblings = db.prepare(
+        "SELECT id FROM nodes WHERE parent = ? AND id != ?"
+      ).all(row.parent, row.id) as Array<{ id: string }>;
+      subtreeIds.push(...siblings.map(s => s.id));
+    }
+    const placeholders = subtreeIds.map(() => "?").join(",");
+    const knowledgeRows = db.prepare(
+      `SELECT key, substr(content, 1, 80) as excerpt FROM knowledge
+       WHERE project = ? AND source_node IN (${placeholders})
+       ORDER BY updated_at DESC LIMIT 5`
+    ).all(project, ...subtreeIds) as Array<{ key: string; excerpt: string }>;
+    if (knowledgeRows.length > 0) {
+      resultNode.relevant_knowledge = knowledgeRows;
+    }
+
     return resultNode;
   });
 

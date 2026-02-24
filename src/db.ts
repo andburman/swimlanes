@@ -155,6 +155,16 @@ function migrate(db: Database.Database): void {
 
   // Index on blocked status (must come after blocked column migration)
   db.exec("CREATE INDEX IF NOT EXISTS idx_nodes_blocked ON nodes(project, blocked, resolved)");
+
+  // [sl:w3IsGPGnfqalc4MEJxSKP] Add source_node to knowledge table — links entries to the task being worked on
+  const knowledgeCols = new Set(
+    (db.prepare("SELECT name FROM pragma_table_info('knowledge')").all() as Array<{ name: string }>)
+      .map(c => c.name)
+  );
+  if (!knowledgeCols.has("source_node")) {
+    db.exec("ALTER TABLE knowledge ADD COLUMN source_node TEXT DEFAULT NULL");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_knowledge_source_node ON knowledge(source_node)");
+  }
 }
 
 export function checkpointDb(): void {

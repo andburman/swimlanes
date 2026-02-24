@@ -23,6 +23,7 @@ interface KnowledgeRow {
   project: string;
   key: string;
   content: string;
+  source_node: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -34,6 +35,7 @@ export interface KnowledgeWriteInput {
   project: string;
   key: string;
   content: string;
+  source_node?: string;
 }
 
 export function handleKnowledgeWrite(input: KnowledgeWriteInput, agent: string) {
@@ -50,16 +52,25 @@ export function handleKnowledgeWrite(input: KnowledgeWriteInput, agent: string) 
     .prepare("SELECT id FROM knowledge WHERE project = ? AND key = ?")
     .get(project, key) as { id: string } | undefined;
 
+  // [sl:KnkxY2V4h6OBwpV-z0E3L] Auto-detect source_node from agent's currently claimed node
+  let sourceNode = input.source_node ?? null;
+  if (!sourceNode) {
+    const claimed = db.prepare(
+      "SELECT id FROM nodes WHERE project = ? AND resolved = 0 AND json_extract(properties, '$._claimed_by') = ? LIMIT 1"
+    ).get(project, agent) as { id: string } | undefined;
+    if (claimed) sourceNode = claimed.id;
+  }
+
   if (existing) {
     db.prepare(
-      "UPDATE knowledge SET content = ?, updated_at = ? WHERE id = ?"
-    ).run(content, now, existing.id);
+      "UPDATE knowledge SET content = ?, source_node = COALESCE(?, source_node), updated_at = ? WHERE id = ?"
+    ).run(content, sourceNode, now, existing.id);
     return { key, action: "updated" };
   } else {
     const id = nanoid();
     db.prepare(
-      "INSERT INTO knowledge (id, project, key, content, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).run(id, project, key, content, agent, now, now);
+      "INSERT INTO knowledge (id, project, key, content, source_node, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(id, project, key, content, sourceNode, agent, now, now);
     return { key, action: "created" };
   }
 }
@@ -90,6 +101,7 @@ export function handleKnowledgeRead(input: KnowledgeReadInput) {
     return {
       key: row.key,
       content: row.content,
+      source_node: row.source_node,
       updated_at: row.updated_at,
       created_by: row.created_by,
     };
@@ -97,8 +109,8 @@ export function handleKnowledgeRead(input: KnowledgeReadInput) {
 
   // List all
   const rows = db
-    .prepare("SELECT key, content, updated_at, created_by FROM knowledge WHERE project = ? ORDER BY updated_at DESC")
-    .all(project) as Array<{ key: string; content: string; updated_at: string; created_by: string }>;
+    .prepare("SELECT key, content, source_node, updated_at, created_by FROM knowledge WHERE project = ? ORDER BY updated_at DESC")
+    .all(project) as Array<{ key: string; content: string; source_node: string | null; updated_at: string; created_by: string }>;
 
   return { entries: rows };
 }
@@ -146,9 +158,9 @@ export function handleKnowledgeSearch(input: KnowledgeSearchInput) {
 
   const rows = db
     .prepare(
-      "SELECT key, content, updated_at, created_by FROM knowledge WHERE project = ? AND (key LIKE ? OR content LIKE ?) ORDER BY updated_at DESC"
+      "SELECT key, content, source_node, updated_at, created_by FROM knowledge WHERE project = ? AND (key LIKE ? OR content LIKE ?) ORDER BY updated_at DESC"
     )
-    .all(project, pattern, pattern) as Array<{ key: string; content: string; updated_at: string; created_by: string }>;
+    .all(project, pattern, pattern) as Array<{ key: string; content: string; source_node: string | null; updated_at: string; created_by: string }>;
 
   return { entries: rows, query };
 }

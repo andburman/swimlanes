@@ -457,6 +457,7 @@ const TOOLS = [
         project: { type: "string", description: "Project name" },
         key: { type: "string", description: "Knowledge entry key (e.g. 'auth', 'database-schema', 'api-contracts')" },
         content: { type: "string", description: "Free-form text content" },
+        source_node: { type: "string", description: "Node ID this knowledge was written during. Auto-detected from agent's claimed node if omitted." },
       },
       required: ["project", "key", "content"],
     },
@@ -545,6 +546,15 @@ const TOOLS = [
           type: "array",
           items: { type: "string" },
           description: "Files modified. Auto-detected from git if omitted.",
+        },
+        knowledge: {
+          type: "object",
+          description: "Optional: write a knowledge entry in the same call. Auto-links to the resolved node.",
+          properties: {
+            key: { type: "string", description: "Knowledge entry key" },
+            content: { type: "string", description: "Knowledge content" },
+          },
+          required: ["key", "content"],
         },
       },
       required: ["node_id", "message"],

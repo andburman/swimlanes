@@ -89,9 +89,9 @@ if (args[0] === "activate") {
   // 4. Rebuild with new version
   run("npm run build");
 
-  // 5. Commit and push
+  // 5. Commit and push — only stage package.json (the version bump)
   console.log("\nCommitting and pushing...");
-  run("git add -A");
+  run("git add package.json");
   run(`git commit -m "Bump to ${newVersion}"`);
   run("git push");
 

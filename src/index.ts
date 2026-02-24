@@ -29,6 +29,7 @@ Usage: graph <command>
 Commands:
   init           Set up graph in the current project (.mcp.json, agent file, CLAUDE.md)
   update         Clear npx cache and re-run init to get the latest version
+  ship           Build, test, bump, commit, push, and create GitHub release
   activate       Activate a license key
   backup         List, create, or restore database backups
   ui             Start the graph web UI
@@ -60,6 +61,63 @@ if (args[0] === "activate") {
   init();
   console.log("");
   console.log("Updated. Restart Claude Code to load the new version.");
+} else if (args[0] === "ship") {
+  const { execSync } = await import("child_process");
+  const { readFileSync: readFs, writeFileSync: writeFs } = await import("fs");
+  const { join: joinPath, dirname: dirnamePath } = await import("path");
+  const { fileURLToPath: fileUrl } = await import("url");
+
+  const run = (cmd: string) => execSync(cmd, { stdio: "inherit", encoding: "utf-8" });
+
+  // 1. Build
+  console.log("Building...");
+  run("npm run build");
+
+  // 2. Test
+  console.log("\nRunning tests...");
+  run("npm test");
+
+  // 3. Bump patch version
+  const pkgPath = joinPath(dirnamePath(fileUrl(import.meta.url)), "..", "package.json");
+  const pkg = JSON.parse(readFs(pkgPath, "utf-8"));
+  const [major, minor, patch] = pkg.version.split(".").map(Number);
+  const newVersion = `${major}.${minor}.${patch + 1}`;
+  pkg.version = newVersion;
+  writeFs(pkgPath, JSON.stringify(pkg, null, 2) + "\n", "utf-8");
+  console.log(`\nBumped version: ${major}.${minor}.${patch} → ${newVersion}`);
+
+  // 4. Rebuild with new version
+  run("npm run build");
+
+  // 5. Commit and push
+  console.log("\nCommitting and pushing...");
+  run("git add -A");
+  run(`git commit -m "Bump to ${newVersion}"`);
+  run("git push");
+
+  // 6. Generate release notes from commits since last tag
+  let notes = "";
+  try {
+    const lastTag = execSync("git describe --tags --abbrev=0 HEAD~1", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+    notes = execSync(`git log --oneline ${lastTag}..HEAD~1`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+  } catch {
+    // No previous tag — use last 10 commits
+    notes = execSync("git log --oneline -10 HEAD~1", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+  }
+
+  const releaseBody = notes
+    .split("\n")
+    .map((line: string) => `- ${line.slice(line.indexOf(" ") + 1)}`)
+    .join("\n");
+
+  // 7. Create GitHub release
+  console.log(`\nCreating GitHub release v${newVersion}...`);
+  execSync(
+    `gh release create v${newVersion} --target main --title "v${newVersion}" --notes "${releaseBody.replace(/"/g, '\\"')}"`,
+    { stdio: "inherit" }
+  );
+
+  console.log(`\n✓ Shipped v${newVersion}`);
 } else if (args[0] === "backup") {
   const { setDbPath, resolveDbPath, initDb, backupDb, listBackups, restoreDb } = await import("./db.js");
   const dbp = resolveDbPath();

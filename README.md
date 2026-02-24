@@ -163,7 +163,7 @@ Add to `.mcp.json` (or run `npx -y @graph-tl/graph init`):
   "mcpServers": {
     "graph": {
       "command": "npx",
-      "args": ["-y", "@graph-tl/graph"],
+      "args": ["-y", "@graph-tl/graph@latest"],
       "env": {
         "GRAPH_AGENT": "claude-code"
       }
@@ -179,7 +179,27 @@ Environment variables (all optional):
 | `GRAPH_AGENT` | `default-agent` | Agent identity for audit trail |
 | `GRAPH_DB` | `~/.graph/db/<hash>/graph.db` | Database path (per-project, outside your repo) |
 | `GRAPH_CLAIM_TTL` | `60` | Soft claim expiry in minutes |
-| `GRAPH_UPDATE_CHECK` | `0` | Set to `1` to check npm for newer versions on startup |
+
+## CLI
+
+```bash
+graph init           # Set up graph in the current project
+graph update         # Clear npx cache and re-run init to get the latest version
+graph backup         # List, create, or restore database backups
+graph ui             # Start the web UI
+graph --version      # Print version
+graph --help         # Print usage summary
+```
+
+### Updating
+
+Graph checks npm for newer versions on every MCP server startup. When an update is available, agents see the notice at session start via `graph_onboard`. To update:
+
+```bash
+npx @graph-tl/graph update
+```
+
+This clears the npx cache, re-writes `.mcp.json` with `@latest` pinning, and updates the agent file. Restart Claude Code to load the new version.
 
 ## Token efficiency
 

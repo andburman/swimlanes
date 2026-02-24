@@ -87,7 +87,13 @@ export function init(): void {
 
 This project uses Graph for task tracking across sessions.
 
-**When to use graph:** Always. When the user asks to implement, build, fix, add, refactor, update, create, change, or remove code — route through graph. No implementation without \`graph_onboard\` first. This includes "quick fixes" and "small changes" — they all go through the graph.
+**When to use graph:** Always. Any of these signals mean "use graph":
+- **Action verbs:** implement, build, fix, add, refactor, update, create, change, remove, debug, migrate, upgrade, optimize, improve, rewrite, redesign, set up, configure, integrate, wire up, connect, scaffold, test, deploy, move, rename, extract, split
+- **Problem signals:** "there's a bug", "something's broken", "not working", "get X working"
+- **Continuation:** "finish", "continue", "pick up where we left off"
+- **Feature/task descriptions:** any time the user describes what they want built, changed, or fixed — even casually — that's a graph task
+
+No implementation without \`graph_onboard\` first. This includes "quick fixes" and "small changes" — they all go through the graph. When in doubt, use graph.
 
 **Every session:** Start with \`graph_onboard\` to see project state, actionable tasks, and continuity confidence.
 

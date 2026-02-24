@@ -4,7 +4,7 @@ function agentPrompt(version: string): string {
   return `---
 name: graph
 version: ${version}
-description: Use this agent for any implementation task — building features, fixing bugs, refactoring, adding tests, or any multi-step code change. Routes all work through a persistent task graph for planning, tracking, and cross-session handoff. Also use when the user mentions graph, tasks, backlog, or planning work.
+description: Use this agent whenever the user describes work to be done — building features, fixing bugs, refactoring, debugging, migrating, optimizing, configuring, integrating, testing, deploying, rewriting, or any code change. Also triggers on problem signals ("there's a bug", "not working"), continuation ("finish", "continue"), and feature/task descriptions. Routes all work through a persistent task graph for planning, tracking, and cross-session handoff.
 tools: Read, Edit, Write, Bash, Glob, Grep, Task(Explore), AskUserQuestion
 model: sonnet
 ---

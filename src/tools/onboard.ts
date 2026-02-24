@@ -4,6 +4,7 @@ import { optionalString, optionalNumber } from "../validate.js";
 import { EngineError } from "../validate.js";
 import { computeContinuityConfidence, type ContinuityConfidence } from "../continuity.js";
 import { computeIntegrity } from "../integrity.js";
+import { getUpdateWarning } from "../server.js";
 import type { NodeRow, Evidence } from "../types.js";
 
 // [sl:yosc4NuV6j43Zv0fsDXDj] graph_onboard — single-call orientation for new agents
@@ -452,6 +453,12 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
   if (strict && checklist.some((c) => c.status === "action_required")) {
     const prefix = "\u26A0 Rehydrate checklist has action items \u2014 review before claiming work.";
     hint = hint ? `${prefix}\n${hint}` : prefix;
+  }
+
+  // Surface update warning from version check
+  const updateHint = getUpdateWarning();
+  if (updateHint) {
+    hint = hint ? `${hint}\n${updateHint}` : updateHint;
   }
 
   // [sl:Mox85EgzSfvuXq-JhMFwW] Recommended next task with rationale

@@ -1,7 +1,45 @@
 // [sl:WvU_sWubakQWRCkP993pp] CLI routing — activate subcommand or MCP server
 export {};
 
+import { readFileSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+
+let PKG_VERSION = "0.0.0";
+try {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+  PKG_VERSION = pkg.version;
+} catch {}
+
 const args = process.argv.slice(2);
+
+// --version / -v
+if (args[0] === "--version" || args[0] === "-v") {
+  console.log(`@graph-tl/graph ${PKG_VERSION}`);
+  process.exit(0);
+}
+
+// --help / -h
+if (args[0] === "--help" || args[0] === "-h") {
+  console.log(`@graph-tl/graph v${PKG_VERSION}
+
+Usage: graph <command>
+
+Commands:
+  init           Set up graph in the current project (.mcp.json, agent file, CLAUDE.md)
+  update         Clear npx cache and re-run init to get the latest version
+  activate       Activate a license key
+  backup         List, create, or restore database backups
+  ui             Start the graph web UI
+
+Flags:
+  --version, -v  Print version
+  --help, -h     Print this help message
+
+Without a command, starts the MCP server (used by Claude Code).`);
+  process.exit(0);
+}
 
 if (args[0] === "activate") {
   const { activate } = await import("./activate.js");
@@ -9,6 +47,19 @@ if (args[0] === "activate") {
 } else if (args[0] === "init") {
   const { init } = await import("./init.js");
   init();
+} else if (args[0] === "update") {
+  const { execSync } = await import("child_process");
+  console.log("Clearing npx cache...");
+  try {
+    execSync("npx clear-npx-cache", { stdio: "inherit" });
+  } catch {
+    // clear-npx-cache may not be available; continue anyway
+  }
+  console.log("");
+  const { init } = await import("./init.js");
+  init();
+  console.log("");
+  console.log("Updated. Restart Claude Code to load the new version.");
 } else if (args[0] === "backup") {
   const { setDbPath, resolveDbPath, initDb, backupDb, listBackups, restoreDb } = await import("./db.js");
   const dbp = resolveDbPath();

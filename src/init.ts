@@ -14,7 +14,7 @@ try {
 
 const MCP_CONFIG = {
   command: "npx",
-  args: ["-y", "@graph-tl/graph"],
+  args: ["-y", "@graph-tl/graph@latest"],
   env: {
     GRAPH_AGENT: "claude-code",
   },
@@ -30,7 +30,19 @@ export function init(): void {
     try {
       const config = JSON.parse(readFileSync(configPath, "utf8"));
       if (config.mcpServers?.graph) {
-        console.log("✓ .mcp.json — graph already configured");
+        // Auto-upgrade old args (without @latest) so npx always fetches latest
+        const currentArgs: string[] | undefined = config.mcpServers.graph.args;
+        const hasOldPkg = currentArgs?.some((a: string) => a === "@graph-tl/graph");
+        if (hasOldPkg) {
+          config.mcpServers.graph.args = currentArgs!.map((a: string) =>
+            a === "@graph-tl/graph" ? "@graph-tl/graph@latest" : a
+          );
+          writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+          console.log("✓ .mcp.json — upgraded args to @graph-tl/graph@latest");
+          wrote = true;
+        } else {
+          console.log("✓ .mcp.json — graph already configured");
+        }
       } else {
         config.mcpServers = config.mcpServers ?? {};
         config.mcpServers.graph = MCP_CONFIG;

@@ -56,13 +56,18 @@ let versionBanner: string | null = `[graph] v${PKG_VERSION}`;
 // Non-blocking version check against npm registry
 let updateWarning: string | null = null;
 
+/** Returns the current update warning (if any). Used by onboard to surface outdated hints. */
+export function getUpdateWarning(): string | null {
+  return updateWarning;
+}
+
 async function checkForUpdate(): Promise<void> {
   try {
     const res = await fetch(`https://registry.npmjs.org/${PKG_NAME}/latest`);
     if (!res.ok) return;
     const data = await res.json() as { version: string };
     if (data.version !== PKG_VERSION) {
-      updateWarning = `[graph] Update available: ${PKG_VERSION} → ${data.version}. Run: npx clear-npx-cache && restart MCP server.`;
+      updateWarning = `[graph] Update available: ${PKG_VERSION} → ${data.version}. Run: graph update (or npx @graph-tl/graph update)`;
     }
   } catch {}
 }
@@ -559,10 +564,8 @@ export async function startServer(): Promise<void> {
     { capabilities: { tools: {}, resources: {} } }
   );
 
-  // Fire-and-forget version check (opt-in: GRAPH_UPDATE_CHECK=1)
-  if (process.env.GRAPH_UPDATE_CHECK === "1") {
-    checkForUpdate();
-  }
+  // Fire-and-forget version check (always-on, single non-blocking fetch)
+  checkForUpdate();
 
   // List tools
   server.setRequestHandler(ListToolsRequestSchema, async () => ({

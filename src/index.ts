@@ -30,6 +30,7 @@ Commands:
   init           Set up graph in the current project (.mcp.json, agent file, CLAUDE.md)
   update         Clear npx cache and re-run init to get the latest version
   ship           Build, test, bump, commit, push, and create GitHub release
+  doctor         Run integrity checks on all projects (evidence, claims, orphans, staleness)
   activate       Activate a license key
   backup         List, create, or restore database backups
   ui             Start the graph web UI
@@ -61,6 +62,56 @@ if (args[0] === "activate") {
   init();
   console.log("");
   console.log("Updated. Restart Claude Code to load the new version.");
+} else if (args[0] === "doctor") {
+  const { setDbPath, resolveDbPath, initDb } = await import("./db.js");
+  const { listProjects, getProjectSummary } = await import("./nodes.js");
+  const { computeIntegrity } = await import("./integrity.js");
+
+  const dbp = resolveDbPath();
+  setDbPath(dbp);
+  initDb();
+
+  const projects = listProjects();
+  if (projects.length === 0) {
+    console.log("No projects found. Run graph init and create a project first.");
+    process.exit(0);
+  }
+
+  let totalIssues = 0;
+  for (const proj of projects) {
+    const summary = getProjectSummary(proj.project);
+    const integrity = computeIntegrity(proj.project);
+    totalIssues += integrity.issues.length;
+
+    console.log(`\n── ${proj.project} ──`);
+    console.log(`  Tasks: ${summary.total} total, ${summary.resolved} resolved, ${summary.actionable} actionable, ${summary.blocked} blocked`);
+    console.log(`  Integrity: ${integrity.score}/100`);
+    console.log(`  Quality KPI: ${integrity.quality_kpi.percentage}% high-quality (${integrity.quality_kpi.high_quality}/${integrity.quality_kpi.resolved} resolved)`);
+
+    if (integrity.issues.length === 0) {
+      console.log("  Issues: none ✓");
+    } else {
+      console.log(`  Issues: ${integrity.issues.length}`);
+      // Group by type
+      const byType = new Map<string, number>();
+      for (const issue of integrity.issues) {
+        byType.set(issue.type, (byType.get(issue.type) ?? 0) + 1);
+      }
+      for (const [type, count] of byType) {
+        console.log(`    ${type}: ${count}`);
+      }
+      // Show first 5 issues with details
+      for (const issue of integrity.issues.slice(0, 5)) {
+        console.log(`    - [${issue.type}] ${issue.summary}`);
+        console.log(`      ${issue.detail}`);
+      }
+      if (integrity.issues.length > 5) {
+        console.log(`    ... and ${integrity.issues.length - 5} more`);
+      }
+    }
+  }
+
+  console.log(`\n${totalIssues === 0 ? "✓ All clean." : `${totalIssues} issue(s) found across ${projects.length} project(s).`}`);
 } else if (args[0] === "ship") {
   const { execSync } = await import("child_process");
   const { readFileSync: readFs, writeFileSync: writeFs } = await import("fs");

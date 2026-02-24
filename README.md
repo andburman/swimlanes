@@ -186,6 +186,7 @@ Environment variables (all optional):
 graph init           # Set up graph in the current project
 graph update         # Clear npx cache and re-run init to get the latest version
 graph ship           # Build, test, bump, commit, push, and create GitHub release
+graph doctor         # Run integrity checks on all projects
 graph backup         # List, create, or restore database backups
 graph ui             # Start the web UI
 graph --version      # Print version

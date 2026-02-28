@@ -24,6 +24,7 @@ import { handleTree } from "./tools/tree.js";
 import { handleStatus } from "./tools/status.js";
 import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch } from "./tools/knowledge.js";
 import { handleRetro } from "./tools/retro.js";
+import { handleKnowledgeAudit } from "./tools/knowledge-audit.js";
 import { handleResolve } from "./tools/resolve.js";
 import { getLicenseTier, type Tier } from "./license.js";
 import { checkNodeLimit, checkProjectLimit, capEvidenceLimit, checkScope, checkKnowledgeTier } from "./gates.js";
@@ -507,6 +508,18 @@ const TOOLS = [
     },
   },
   {
+    name: "graph_knowledge_audit",
+    description:
+      "Deep-clean audit of all knowledge entries. Returns every entry with staleness (days since update), source node status (active/resolved/missing), key overlap detection, and a structured analysis prompt. Use for periodic knowledge hygiene — consolidating duplicates, removing stale entries, fixing contradictions. For lightweight drift detection during regular work, use graph_retro instead.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project: { type: "string", description: "Project name" },
+      },
+      required: ["project"],
+    },
+  },
+  {
     name: "graph_retro",
     description:
       "Run a structured retro on recent work. Call once without findings to get context (recently resolved tasks + evidence since last retro, plus knowledge entries for cross-checking), then call again with categorized findings. Stores retro as a knowledge entry and surfaces CLAUDE.md instruction candidates. Compare resolved work against knowledge entries to detect drift (contradictions, outdated information, nomenclature inconsistency).",
@@ -698,6 +711,11 @@ export async function startServer(): Promise<void> {
         case "graph_knowledge_search":
           checkKnowledgeTier(tier);
           result = handleKnowledgeSearch(args as any);
+          break;
+
+        case "graph_knowledge_audit":
+          checkKnowledgeTier(tier);
+          result = handleKnowledgeAudit(args as any);
           break;
 
         case "graph_retro":

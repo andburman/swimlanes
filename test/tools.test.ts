@@ -15,6 +15,7 @@ import { handleTree } from "../src/tools/tree.js";
 import { handleStatus } from "../src/tools/status.js";
 import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch } from "../src/tools/knowledge.js";
 import { handleRetro } from "../src/tools/retro.js";
+import { handleKnowledgeAudit } from "../src/tools/knowledge-audit.js";
 import { handleResolve } from "../src/tools/resolve.js";
 import { updateNode } from "../src/nodes.js";
 import { ValidationError, EngineError } from "../src/validate.js";
@@ -1534,6 +1535,128 @@ describe("graph_knowledge", () => {
     handleKnowledgeWrite({ project: "kb-src3", key: "orphan", content: "No task context" }, AGENT);
     const read = handleKnowledgeRead({ project: "kb-src3", key: "orphan" }) as any;
     expect(read.source_node).toBeNull();
+  });
+});
+
+describe("graph_knowledge_audit", () => {
+  it("returns empty result when no knowledge entries exist", () => {
+    handleOpen({ project: "audit-empty", goal: "No knowledge" }, AGENT);
+    const result = handleKnowledgeAudit({ project: "audit-empty" }) as any;
+    expect(result.entries).toHaveLength(0);
+    expect(result.summary.total).toBe(0);
+    expect(result.prompt).toBe("No knowledge entries to audit.");
+  });
+
+  it("returns entries with staleness and source node status", () => {
+    const { root } = handleOpen({ project: "audit-basic", goal: "Test audit" }, AGENT) as any;
+    handleUpdate({ updates: [{ node_id: root.id, discovery: "done" }] }, AGENT);
+    // Create a task and claim it so knowledge gets a source_node
+    handlePlan({
+      nodes: [{ ref: "t1", summary: "Task one", parent_ref: root.id }],
+    }, AGENT);
+    const next = handleNext({ project: "audit-basic", claim: true }, AGENT) as any;
+    const taskId = next.nodes[0].node.id;
+
+    handleKnowledgeWrite({ project: "audit-basic", key: "arch", content: "Monolith architecture" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-basic", key: "api", content: "REST API v2" }, AGENT);
+
+    const result = handleKnowledgeAudit({ project: "audit-basic" }) as any;
+    expect(result.entries).toHaveLength(2);
+    expect(result.summary.total).toBe(2);
+
+    // Both entries should have source_node pointing to the claimed task
+    for (const entry of result.entries) {
+      expect(entry.source_node.status).toBe("active");
+      expect(entry.source_node.id).toBe(taskId);
+      expect(entry.days_stale).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("detects missing source nodes", () => {
+    handleOpen({ project: "audit-orphan", goal: "Orphan test" }, AGENT);
+    // Write knowledge with no claimed task — source_node will be null
+    handleKnowledgeWrite({ project: "audit-orphan", key: "stale", content: "Some old info" }, AGENT);
+
+    const result = handleKnowledgeAudit({ project: "audit-orphan" }) as any;
+    expect(result.entries[0].source_node.status).toBe("missing");
+    expect(result.summary.missing_source).toBe(1);
+  });
+
+  it("detects resolved source nodes", () => {
+    const { root } = handleOpen({ project: "audit-resolved", goal: "Resolved test" }, AGENT) as any;
+    handleUpdate({ updates: [{ node_id: root.id, discovery: "done" }] }, AGENT);
+    handlePlan({
+      nodes: [{ ref: "t1", summary: "Doable task", parent_ref: root.id }],
+    }, AGENT);
+    const next = handleNext({ project: "audit-resolved", claim: true }, AGENT) as any;
+    const taskId = next.nodes[0].node.id;
+
+    handleKnowledgeWrite({ project: "audit-resolved", key: "decision", content: "Use postgres" }, AGENT);
+
+    // Resolve the task
+    handleUpdate({
+      updates: [{
+        node_id: taskId,
+        resolved: true,
+        add_evidence: [{ type: "note", ref: "Done" }],
+      }],
+    }, AGENT);
+
+    const result = handleKnowledgeAudit({ project: "audit-resolved" }) as any;
+    expect(result.entries[0].source_node.status).toBe("resolved");
+  });
+
+  it("detects similar keys", () => {
+    handleOpen({ project: "audit-overlap", goal: "Overlap test" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-overlap", key: "auth", content: "JWT tokens" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-overlap", key: "authentication", content: "OAuth flow" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-overlap", key: "database", content: "Postgres" }, AGENT);
+
+    const result = handleKnowledgeAudit({ project: "audit-overlap" }) as any;
+
+    // auth and authentication should be flagged as similar
+    const authEntry = result.entries.find((e: any) => e.key === "auth");
+    expect(authEntry.similar_keys).toContain("authentication");
+
+    const authNEntry = result.entries.find((e: any) => e.key === "authentication");
+    expect(authNEntry.similar_keys).toContain("auth");
+
+    // database should not be similar to auth
+    const dbEntry = result.entries.find((e: any) => e.key === "database");
+    expect(dbEntry.similar_keys).toHaveLength(0);
+
+    expect(result.summary.potential_overlaps).toBeGreaterThan(0);
+  });
+
+  it("excludes retro entries from audit", () => {
+    handleOpen({ project: "audit-retro", goal: "Retro exclusion" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-retro", key: "arch", content: "Real knowledge" }, AGENT);
+
+    // Simulate a retro entry by running retro with findings
+    handleRetro({
+      project: "audit-retro",
+      findings: [{ category: "workflow_improvement", insight: "Test finding" }],
+    }, AGENT);
+
+    const result = handleKnowledgeAudit({ project: "audit-retro" }) as any;
+    // Should only contain the real knowledge entry, not the retro
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].key).toBe("arch");
+  });
+
+  it("includes analysis prompt with overlap info", () => {
+    handleOpen({ project: "audit-prompt", goal: "Prompt test" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-prompt", key: "api", content: "REST" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-prompt", key: "api-v2", content: "GraphQL" }, AGENT);
+
+    const result = handleKnowledgeAudit({ project: "audit-prompt" }) as any;
+    expect(result.prompt).toContain("Contradictions");
+    expect(result.prompt).toContain("Nomenclature drift");
+    expect(result.prompt).toContain("overlaps detected");
+  });
+
+  it("throws for unknown project", () => {
+    expect(() => handleKnowledgeAudit({ project: "nonexistent" })).toThrow(EngineError);
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@graph-tl/graph",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "Agent-native persistent task graph. MCP server for agent planning and execution across sessions.",
   "type": "module",
   "main": "dist/index.js",

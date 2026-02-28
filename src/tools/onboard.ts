@@ -63,10 +63,8 @@ export interface OnboardResult {
     timestamp: string;
   }>;
   context_links?: string[];
-  knowledge?: Array<{
-    key: string;
-    updated_at: string;
-  }>;
+  // [sl:l46pcXQG3za7TMBM8tZAf] Compact: category-count summary + stale outliers
+  knowledge?: string;
   recently_resolved?: Array<{
     id: string;
     summary: string;
@@ -102,7 +100,7 @@ export interface OnboardResult {
 function computeChecklist(
   summary: OnboardResult["summary"],
   recent_evidence: OnboardResult["recent_evidence"],
-  knowledge: OnboardResult["knowledge"],
+  knowledgeCount: number,
   actionable: OnboardResult["actionable"],
   blocked_nodes: OnboardResult["blocked_nodes"],
   claimed_nodes: OnboardResult["claimed_nodes"],
@@ -132,8 +130,8 @@ function computeChecklist(
   }
 
   // 2. review_knowledge — check knowledge entries
-  if (knowledge.length > 0) {
-    checklist.push({ check: "review_knowledge", status: "pass", message: `${knowledge.length} knowledge entry(s) available.` });
+  if (knowledgeCount > 0) {
+    checklist.push({ check: "review_knowledge", status: "pass", message: `${knowledgeCount} knowledge entry(s) available.` });
   } else if (summary.resolved >= 5) {
     checklist.push({ check: "review_knowledge", status: "warn", message: "Mature project (5+ resolved tasks) with no knowledge entries.",
       action: `Write key findings via graph_knowledge_write({ project: "${project}", key: "<topic>", content: "..." }).` });
@@ -323,10 +321,33 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
   }
   const context_links = [...linkSet].sort().slice(0, 30);
 
-  // 5. Knowledge entries — keys only (use graph_knowledge_read for content)
-  const knowledgeRows = db
-    .prepare("SELECT key, updated_at FROM knowledge WHERE project = ? ORDER BY updated_at DESC")
-    .all(project) as Array<{ key: string; updated_at: string }>;
+  // 5. Knowledge entries — key + category + staleness (use graph_knowledge_read for content)
+  // [sl:iqpRxbIh_c7ncFodbkVUO] Include category and days_stale so agents know what's documented
+  const knowledgeRawRows = db
+    .prepare("SELECT key, category, updated_at FROM knowledge WHERE project = ? AND key NOT LIKE 'retro-%' ORDER BY updated_at DESC")
+    .all(project) as Array<{ key: string; category: string; updated_at: string }>;
+
+  const knowledgeNow = Date.now();
+  const knowledgeRows = knowledgeRawRows.map(r => ({
+    key: r.key,
+    category: r.category,
+    days_stale: Math.floor((knowledgeNow - new Date(r.updated_at).getTime()) / (1000 * 60 * 60 * 24)),
+  }));
+
+  // [sl:l46pcXQG3za7TMBM8tZAf] Compact knowledge: category-count summary + stale outliers
+  let knowledgeCompact: string | undefined;
+  if (knowledgeRows.length > 0) {
+    const catCounts = new Map<string, number>();
+    const staleEntries: string[] = [];
+    for (const r of knowledgeRows) {
+      catCounts.set(r.category, (catCounts.get(r.category) ?? 0) + 1);
+      if (r.days_stale > 7) staleEntries.push(`${r.key}(${r.days_stale}d)`);
+    }
+    const catParts = [...catCounts.entries()].map(([cat, n]) => `${n}×${cat}`).join(" ");
+    let line = `KNOWLEDGE (${knowledgeRows.length}): ${catParts}`;
+    if (staleEntries.length > 0) line += ` | stale>7d: ${staleEntries.join(" ")}`;
+    knowledgeCompact = line;
+  }
 
   // 6. Actionable tasks preview (like graph_next without claiming)
   const actionableRows = db
@@ -428,7 +449,7 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
   const continuity_confidence = computeContinuityConfidence(project);
 
   // Single-codepath checklist — strip action strings to save tokens (agents use graph_status for details)
-  const fullChecklist = computeChecklist(summary, recent_evidence, knowledgeRows, actionable, blocked_nodes, claimed_nodes, db, project);
+  const fullChecklist = computeChecklist(summary, recent_evidence, knowledgeRows.length, actionable, blocked_nodes, claimed_nodes, db, project);
 
   // Recommended next task with rationale — [sl:Mox85EgzSfvuXq-JhMFwW]
   let recommended_next: OnboardResult["recommended_next"];
@@ -489,6 +510,8 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
       recommended_next,
       continuity_confidence,
       checklist,
+      // [sl:l46pcXQG3za7TMBM8tZAf] Compact knowledge summary
+      knowledge: knowledgeCompact,
     };
   }
 
@@ -515,7 +538,7 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
     checklist,
     recent_evidence,
     context_links,
-    knowledge: knowledgeRows,
+    knowledge: knowledgeCompact,
     recently_resolved,
     last_activity,
     integrity,

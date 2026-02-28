@@ -37,10 +37,11 @@ export interface HealthyEntry {
   days_stale: number;
 }
 
+// [sl:FQWuyfNhEJEGsOXFZGOxP] Compact output: healthy as pipe-delimited text, flagged as JSON
 export interface KnowledgeAuditResult {
   project: string;
   flagged: FlaggedEntry[];
-  healthy: HealthyEntry[];
+  healthy: string; // pipe-delimited: "key|category|Nd" per line
   summary: {
     total: number;
     flagged: number;
@@ -134,7 +135,7 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
     return {
       project,
       flagged: [],
-      healthy: [],
+      healthy: "",
       summary: { total: 0, flagged: 0, stale_30d: 0, missing_source: 0, potential_overlaps: 0 },
       prompt: "No knowledge entries to audit.",
     };
@@ -162,10 +163,10 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
   const keys = rows.map(r => r.key);
   const similarKeys = findSimilarKeys(keys);
 
-  // Build and classify entries — flagged get full detail, healthy get minimal shape
+  // Build and classify entries — flagged get full detail, healthy get pipe-delimited text
   const STALE_THRESHOLD = 30;
   const flagged: FlaggedEntry[] = [];
-  const healthy: HealthyEntry[] = [];
+  const healthyLines: string[] = [];
 
   for (const r of rows) {
     const updatedAt = new Date(r.updated_at);
@@ -209,11 +210,8 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
         similar_keys: similar,
       });
     } else {
-      healthy.push({
-        key: r.key,
-        category: r.category,
-        days_stale: daysSinceUpdate,
-      });
+      // [sl:FQWuyfNhEJEGsOXFZGOxP] Pipe-delimited: ~5 tokens vs ~30 for JSON
+      healthyLines.push(`${r.key}|${r.category}|${daysSinceUpdate}d`);
     }
   }
 
@@ -243,7 +241,7 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
   return {
     project,
     flagged,
-    healthy,
+    healthy: healthyLines.join("\n"),
     summary: {
       total,
       flagged: flagged.length,

@@ -82,6 +82,9 @@ export interface KnowledgeWriteInput {
   source_node?: string;
 }
 
+// [sl:aeHtB8y-pLv-INh_w5N6k] ~2000 tokens ≈ 8000 chars threshold for size warning
+const SIZE_WARNING_THRESHOLD = 8000;
+
 export function handleKnowledgeWrite(input: KnowledgeWriteInput, agent: string) {
   const project = requireString(input.project, "project");
   const key = requireString(input.key, "key");
@@ -114,12 +117,25 @@ export function handleKnowledgeWrite(input: KnowledgeWriteInput, agent: string) 
     if (claimed) sourceNode = claimed.id;
   }
 
+  // Build result and append size warning if needed
+  const sizeWarning = content.length > SIZE_WARNING_THRESHOLD
+    ? `Content is ${content.length} chars (~${Math.round(content.length / 4)} tokens). Consider splitting into multiple entries for better token efficiency.`
+    : undefined;
+
   if (existing) {
     db.prepare(
       "UPDATE knowledge SET content = ?, category = ?, source_node = COALESCE(?, source_node), updated_at = ? WHERE id = ?"
     ).run(content, category, sourceNode, now, existing.id);
     logKnowledgeMutation(project, key, "updated", existing.content, content, agent);
-    return { key, action: "updated" as const };
+    // [sl:T5r3gfp3J40PQ2bUDFpak] Surface previous content so agents can verify they didn't lose information
+    const previous_excerpt = existing.content.length > 200
+      ? existing.content.slice(0, 200) + "..."
+      : existing.content;
+    const result: { key: string; action: "updated"; previous_excerpt: string; warning?: string } = {
+      key, action: "updated", previous_excerpt,
+    };
+    if (sizeWarning) result.warning = sizeWarning;
+    return result;
   } else {
     const id = nanoid();
     db.prepare(
@@ -140,16 +156,73 @@ export function handleKnowledgeWrite(input: KnowledgeWriteInput, agent: string) 
     });
 
     if (similar.length > 0) {
-      const result: { key: string; action: "created"; similar_keys: string[]; same_category_overlap?: string[] } = {
+      const result: { key: string; action: "created"; similar_keys: string[]; same_category_overlap?: string[]; warning?: string } = {
         key, action: "created", similar_keys: similar,
       };
       if (sameCategorySimilar.length > 0) {
         result.same_category_overlap = sameCategorySimilar;
       }
+      if (sizeWarning) result.warning = sizeWarning;
       return result;
     }
-    return { key, action: "created" as const };
+    const result: { key: string; action: "created"; warning?: string } = { key, action: "created" };
+    if (sizeWarning) result.warning = sizeWarning;
+    return result;
   }
+}
+
+// --- graph_knowledge_write_batch --- [sl:EPpdOUXcpO5dSAQDNsfRX]
+
+export interface KnowledgeWriteBatchInput {
+  project: string;
+  entries: Array<{
+    key: string;
+    content: string;
+    category?: KnowledgeCategory;
+    source_node?: string;
+  }>;
+}
+
+// [sl:Ycf9WNY5KS4UzdHF30xie] Compact batch response: summary string + warnings only
+export function handleKnowledgeWriteBatch(input: KnowledgeWriteBatchInput, agent: string) {
+  const project = requireString(input.project, "project");
+  if (!input.entries || !Array.isArray(input.entries) || input.entries.length === 0) {
+    throw new EngineError("invalid_input", "entries must be a non-empty array");
+  }
+
+  requireProject(project);
+
+  const db = getDb();
+  let created = 0;
+  let updated = 0;
+  const warnings: string[] = [];
+
+  const run = db.transaction(() => {
+    for (const entry of input.entries) {
+      const result = handleKnowledgeWrite(
+        { project, key: entry.key, content: entry.content, category: entry.category, source_node: entry.source_node },
+        agent,
+      );
+      if (result.action === "created") created++;
+      else updated++;
+      if (result.warning) warnings.push(`${entry.key}: ${result.warning}`);
+      if ("similar_keys" in result && result.similar_keys) {
+        warnings.push(`${entry.key}: similar to ${(result.similar_keys as string[]).join(", ")}`);
+      }
+    }
+  });
+  run();
+
+  const total = created + updated;
+  let summary = `wrote ${total}/${input.entries.length}`;
+  const parts: string[] = [];
+  if (created > 0) parts.push(`${created} created`);
+  if (updated > 0) parts.push(`${updated} updated`);
+  if (parts.length > 0) summary += ` (${parts.join(", ")})`;
+
+  const result: { project: string; summary: string; warnings?: string[] } = { project, summary };
+  if (warnings.length > 0) result.warnings = warnings;
+  return result;
 }
 
 // --- graph_knowledge_read ---

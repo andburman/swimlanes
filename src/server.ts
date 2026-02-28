@@ -22,7 +22,7 @@ import { handleOnboard } from "./tools/onboard.js";
 import { handleAgentConfig } from "./tools/agent-config.js";
 import { handleTree } from "./tools/tree.js";
 import { handleStatus } from "./tools/status.js";
-import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch } from "./tools/knowledge.js";
+import { handleKnowledgeWrite, handleKnowledgeWriteBatch, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch } from "./tools/knowledge.js";
 import { handleRetro } from "./tools/retro.js";
 import { handleKnowledgeAudit } from "./tools/knowledge-audit.js";
 import { handleResolve } from "./tools/resolve.js";
@@ -474,6 +474,36 @@ const TOOLS = [
     },
   },
   {
+    name: "graph_knowledge_write_batch",
+    description:
+      "Write multiple knowledge entries in a single call. Atomic — all entries succeed or none do. Use for bulk knowledge operations (e.g. processing research, initial documentation). Each entry follows the same rules as graph_knowledge_write.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project: { type: "string", description: "Project name" },
+        entries: {
+          type: "array",
+          description: "Array of knowledge entries to write",
+          items: {
+            type: "object",
+            properties: {
+              key: { type: "string", description: "Knowledge entry key" },
+              content: { type: "string", description: "Free-form text content" },
+              category: {
+                type: "string",
+                enum: ["general", "architecture", "convention", "decision", "environment", "api-contract", "discovery"],
+                description: "Entry category. Defaults to 'general'.",
+              },
+              source_node: { type: "string", description: "Node ID this knowledge was written during" },
+            },
+            required: ["key", "content"],
+          },
+        },
+      },
+      required: ["project", "entries"],
+    },
+  },
+  {
     name: "graph_knowledge_read",
     description:
       "Read knowledge entries for a project. Provide a key to read one entry, or omit to list all entries.",
@@ -701,6 +731,11 @@ export async function startServer(): Promise<void> {
         case "graph_knowledge_write":
           checkKnowledgeTier(tier);
           result = handleKnowledgeWrite(args as any, AGENT_IDENTITY);
+          break;
+
+        case "graph_knowledge_write_batch":
+          checkKnowledgeTier(tier);
+          result = handleKnowledgeWriteBatch(args as any, AGENT_IDENTITY);
           break;
 
         case "graph_knowledge_read":

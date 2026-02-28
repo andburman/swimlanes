@@ -137,6 +137,23 @@ export function handleStatus(input: StatusInput): StatusResult | { projects: Ret
     total_children: r.child_count,
   }));
 
+  // [sl:fQiULd-y8wnR-2W_TsUN-] Fetch dependency info for dep-blocked nodes
+  const depBlockedIds = entries.filter(e => e.dep_blocked && !e.resolved).map(e => e.id);
+  const depMap = new Map<string, string[]>();
+  if (depBlockedIds.length > 0) {
+    const ph = depBlockedIds.map(() => "?").join(",");
+    const depRows = db.prepare(
+      `SELECT e.from_node, n.summary FROM edges e
+       JOIN nodes n ON n.id = e.to_node AND n.resolved = 0
+       WHERE e.from_node IN (${ph}) AND e.type = 'depends_on'`
+    ).all(...depBlockedIds) as Array<{ from_node: string; summary: string }>;
+    for (const r of depRows) {
+      const existing = depMap.get(r.from_node) ?? [];
+      existing.push(r.summary);
+      depMap.set(r.from_node, existing);
+    }
+  }
+
   // Build formatted output
   const lines: string[] = [];
   const taskCount = summary.total - 1; // exclude root
@@ -186,6 +203,15 @@ export function handleStatus(input: StatusInput): StatusResult | { projects: Ret
       // Blocked reason inline
       if (entry.blocked && entry.blocked_reason) {
         line += `\n${prefix}    ^ ${entry.blocked_reason}`;
+      }
+
+      // Dependency blocked — show what it's waiting on
+      if (entry.dep_blocked && !entry.resolved && !entry.blocked) {
+        const deps = depMap.get(entry.id);
+        if (deps && deps.length > 0) {
+          const depList = deps.length <= 2 ? deps.join(", ") : `${deps[0]} +${deps.length - 1} more`;
+          line += `\n${prefix}    ^ waiting on: ${depList}`;
+        }
       }
 
       lines.push(line);

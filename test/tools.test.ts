@@ -13,7 +13,7 @@ import { handleOnboard } from "../src/tools/onboard.js";
 import { handleAgentConfig } from "../src/tools/agent-config.js";
 import { handleTree } from "../src/tools/tree.js";
 import { handleStatus } from "../src/tools/status.js";
-import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch, getKnowledgeLog } from "../src/tools/knowledge.js";
+import { handleKnowledgeWrite, handleKnowledgeWriteBatch, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch, getKnowledgeLog } from "../src/tools/knowledge.js";
 import { handleRetro } from "../src/tools/retro.js";
 import { handleKnowledgeAudit } from "../src/tools/knowledge-audit.js";
 import { handleResolve } from "../src/tools/resolve.js";
@@ -954,24 +954,35 @@ describe("graph_onboard", () => {
     expect(() => handleOnboard({ project: "nope" })).toThrow(EngineError);
   });
 
-  it("includes knowledge entries", () => {
+  it("includes compact knowledge summary with category counts", () => {
     openProject("test", "Build app", AGENT);
 
-    // Write some knowledge
-    handleKnowledgeWrite({ project: "test", key: "architecture", content: "Monorepo with pnpm workspaces" }, AGENT);
-    handleKnowledgeWrite({ project: "test", key: "conventions", content: "Use kebab-case for file names" }, AGENT);
+    handleKnowledgeWrite({ project: "test", key: "architecture", content: "Monorepo with pnpm workspaces", category: "architecture" }, AGENT);
+    handleKnowledgeWrite({ project: "test", key: "conventions", content: "Use kebab-case for file names", category: "convention" }, AGENT);
 
     const result = handleOnboard({ project: "test", detail: "full" });
-    expect(result.knowledge).toHaveLength(2);
-    expect(result.knowledge.map((k) => k.key).sort()).toEqual(["architecture", "conventions"]);
-    expect(result.knowledge[0].updated_at).toBeDefined();
+    expect(typeof result.knowledge).toBe("string");
+    expect(result.knowledge).toContain("KNOWLEDGE (2)");
+    expect(result.knowledge).toContain("1×architecture");
+    expect(result.knowledge).toContain("1×convention");
   });
 
-  it("returns empty knowledge array when none exist", () => {
+  // [sl:l46pcXQG3za7TMBM8tZAf] Compact knowledge string in onboard
+  it("includes compact knowledge summary in brief mode", () => {
+    openProject("test", "Build app", AGENT);
+    handleKnowledgeWrite({ project: "test", key: "arch", content: "Notes" }, AGENT);
+
+    const result = handleOnboard({ project: "test", detail: "brief" });
+    expect(typeof result.knowledge).toBe("string");
+    expect(result.knowledge).toContain("KNOWLEDGE (1)");
+    expect(result.knowledge).toContain("1×general");
+  });
+
+  it("omits knowledge when none exist", () => {
     openProject("test", "Build app", AGENT);
 
     const result = handleOnboard({ project: "test", detail: "full" });
-    expect(result.knowledge).toEqual([]);
+    expect(result.knowledge).toBeUndefined();
   });
 
   it("surfaces root discovery status and hint for new project", () => {
@@ -1426,15 +1437,40 @@ describe("graph_knowledge", () => {
     expect(readResult.content).toBe("Monorepo with turborepo");
   });
 
-  it("overwrites existing key", () => {
+  it("overwrites existing key and returns previous excerpt", () => {
     handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
 
     handleKnowledgeWrite({ project: "kb-test", key: "db", content: "PostgreSQL" }, AGENT);
-    const update = handleKnowledgeWrite({ project: "kb-test", key: "db", content: "SQLite" }, AGENT);
+    const update = handleKnowledgeWrite({ project: "kb-test", key: "db", content: "SQLite" }, AGENT) as any;
     expect(update.action).toBe("updated");
+    expect(update.previous_excerpt).toBe("PostgreSQL");
 
     const read = handleKnowledgeRead({ project: "kb-test", key: "db" }) as any;
     expect(read.content).toBe("SQLite");
+  });
+
+  it("warns when content exceeds size threshold", () => {
+    handleOpen({ project: "kb-size", goal: "Size test" }, AGENT);
+    const bigContent = "X".repeat(9000);
+    const result = handleKnowledgeWrite({ project: "kb-size", key: "big", content: bigContent }, AGENT) as any;
+    expect(result.action).toBe("created");
+    expect(result.warning).toContain("9000 chars");
+    expect(result.warning).toContain("splitting");
+  });
+
+  it("no warning for normal-sized content", () => {
+    handleOpen({ project: "kb-normal", goal: "Normal test" }, AGENT);
+    const result = handleKnowledgeWrite({ project: "kb-normal", key: "small", content: "Short content" }, AGENT) as any;
+    expect(result.warning).toBeUndefined();
+  });
+
+  it("truncates long previous_excerpt to 200 chars", () => {
+    handleOpen({ project: "kb-trunc", goal: "Test truncation" }, AGENT);
+    const longContent = "A".repeat(300);
+    handleKnowledgeWrite({ project: "kb-trunc", key: "long", content: longContent }, AGENT);
+    const update = handleKnowledgeWrite({ project: "kb-trunc", key: "long", content: "Short now" }, AGENT) as any;
+    expect(update.previous_excerpt.length).toBeLessThanOrEqual(203); // 200 + "..."
+    expect(update.previous_excerpt).toContain("...");
   });
 
   it("lists all entries when key omitted", () => {
@@ -1684,20 +1720,101 @@ describe("graph_knowledge", () => {
   });
 });
 
+describe("graph_knowledge_write_batch", () => {
+  // [sl:Ycf9WNY5KS4UzdHF30xie] Compact batch response
+  it("creates multiple entries in one call", () => {
+    handleOpen({ project: "batch-create", goal: "Batch test" }, AGENT);
+    const result = handleKnowledgeWriteBatch({
+      project: "batch-create",
+      entries: [
+        { key: "arch", content: "Monolith", category: "architecture" },
+        { key: "conventions", content: "Use kebab-case", category: "convention" },
+        { key: "db-schema", content: "Postgres with Prisma" },
+      ],
+    }, AGENT) as any;
+
+    expect(result.summary).toBe("wrote 3/3 (3 created)");
+    expect(result.warnings).toBeUndefined();
+
+    // Verify entries actually exist
+    const all = handleKnowledgeRead({ project: "batch-create" }) as any;
+    expect(all.entries).toHaveLength(3);
+    const archEntry = all.entries.find((e: any) => e.key === "arch");
+    expect(archEntry.category).toBe("architecture");
+  });
+
+  it("handles mixed create and update", () => {
+    handleOpen({ project: "batch-mixed", goal: "Mixed test" }, AGENT);
+    handleKnowledgeWrite({ project: "batch-mixed", key: "existing", content: "Old content" }, AGENT);
+
+    const result = handleKnowledgeWriteBatch({
+      project: "batch-mixed",
+      entries: [
+        { key: "existing", content: "New content" },
+        { key: "new-entry", content: "Fresh content" },
+      ],
+    }, AGENT) as any;
+
+    expect(result.summary).toBe("wrote 2/2 (1 created, 1 updated)");
+
+    // Verify update took effect
+    const entry = handleKnowledgeRead({ project: "batch-mixed", key: "existing" }) as any;
+    expect(entry.content).toBe("New content");
+  });
+
+  it("is atomic — invalid category rolls back all entries", () => {
+    handleOpen({ project: "batch-atomic", goal: "Atomic test" }, AGENT);
+
+    expect(() => handleKnowledgeWriteBatch({
+      project: "batch-atomic",
+      entries: [
+        { key: "good", content: "Valid entry", category: "architecture" },
+        { key: "bad", content: "Invalid", category: "nonexistent" as any },
+      ],
+    }, AGENT)).toThrow("Invalid category");
+
+    // First entry should NOT exist due to rollback
+    const all = handleKnowledgeRead({ project: "batch-atomic" }) as any;
+    expect(all.entries).toHaveLength(0);
+  });
+
+  it("rejects empty entries array", () => {
+    handleOpen({ project: "batch-empty", goal: "Empty test" }, AGENT);
+    expect(() => handleKnowledgeWriteBatch({
+      project: "batch-empty",
+      entries: [],
+    }, AGENT)).toThrow("non-empty array");
+  });
+
+  it("surfaces similar keys as warnings in batch", () => {
+    handleOpen({ project: "batch-overlap", goal: "Overlap test" }, AGENT);
+    const result = handleKnowledgeWriteBatch({
+      project: "batch-overlap",
+      entries: [
+        { key: "auth", content: "JWT tokens" },
+        { key: "authentication", content: "OAuth flow" },
+      ],
+    }, AGENT) as any;
+
+    // Second entry should detect similarity with first — surfaced as warning
+    expect(result.warnings).toBeDefined();
+    expect(result.warnings.some((w: string) => w.includes("authentication") && w.includes("auth"))).toBe(true);
+  });
+});
+
 describe("graph_knowledge_audit", () => {
   it("returns empty result when no knowledge entries exist", () => {
     handleOpen({ project: "audit-empty", goal: "No knowledge" }, AGENT);
     const result = handleKnowledgeAudit({ project: "audit-empty" }) as any;
     expect(result.flagged).toHaveLength(0);
-    expect(result.healthy).toHaveLength(0);
+    expect(result.healthy).toBe("");
     expect(result.summary.total).toBe(0);
     expect(result.prompt).toBe("No knowledge entries to audit.");
   });
 
-  it("classifies healthy entries with minimal data", () => {
+  it("returns healthy entries as pipe-delimited text", () => {
     const { root } = handleOpen({ project: "audit-basic", goal: "Test audit" }, AGENT) as any;
     handleUpdate({ updates: [{ node_id: root.id, discovery: "done" }] }, AGENT);
-    // Create a task and claim it so knowledge gets a source_node
     handlePlan({
       nodes: [{ ref: "t1", summary: "Task one", parent_ref: root.id }],
     }, AGENT);
@@ -1708,17 +1825,15 @@ describe("graph_knowledge_audit", () => {
 
     const result = handleKnowledgeAudit({ project: "audit-basic" }) as any;
     expect(result.summary.total).toBe(2);
-    // Both entries are healthy — active source, fresh, no overlap
-    expect(result.healthy).toHaveLength(2);
     expect(result.flagged).toHaveLength(0);
 
-    // Healthy entries have minimal shape: key + category + days_stale only
-    for (const entry of result.healthy) {
-      expect(entry.key).toBeDefined();
-      expect(entry.category).toBe("general");
-      expect(entry.days_stale).toBeGreaterThanOrEqual(0);
-      expect(entry.content).toBeUndefined(); // no content for healthy
-    }
+    // Healthy entries are pipe-delimited: key|category|Nd
+    expect(typeof result.healthy).toBe("string");
+    const lines = result.healthy.split("\n");
+    expect(lines).toHaveLength(2);
+    expect(result.healthy).toContain("api|general|");
+    expect(result.healthy).toContain("arch|general|");
+    expect(lines[0]).toMatch(/\d+d$/);
   });
 
   it("flags entries with missing source nodes", () => {
@@ -1755,9 +1870,8 @@ describe("graph_knowledge_audit", () => {
     }, AGENT);
 
     const result = handleKnowledgeAudit({ project: "audit-resolved" }) as any;
-    // Resolved source node is not a flag — it's normal
-    expect(result.healthy).toHaveLength(1);
-    expect(result.healthy[0].key).toBe("decision");
+    // Resolved source node is not a flag — it's normal (pipe-delimited)
+    expect(result.healthy).toContain("decision|general|");
   });
 
   it("flags entries with similar keys and includes content", () => {
@@ -1793,10 +1907,14 @@ describe("graph_knowledge_audit", () => {
 
     const result = handleKnowledgeAudit({ project: "audit-retro" }) as any;
     // Should only contain the real knowledge entry, not the retro — it's orphaned so flagged
-    const total = result.flagged.length + result.healthy.length;
+    const healthyCount = result.healthy ? result.healthy.split("\n").filter(Boolean).length : 0;
+    const total = result.flagged.length + healthyCount;
     expect(total).toBe(1);
-    const entry = result.flagged[0] || result.healthy[0];
-    expect(entry.key).toBe("arch");
+    if (result.flagged.length > 0) {
+      expect(result.flagged[0].key).toBe("arch");
+    } else {
+      expect(result.healthy).toContain("arch");
+    }
   });
 
   it("includes analysis prompt with overlap info when flagged", () => {
@@ -1823,7 +1941,9 @@ describe("graph_knowledge_audit", () => {
 
     const result = handleKnowledgeAudit({ project: "audit-healthy" }) as any;
     expect(result.flagged).toHaveLength(0);
-    expect(result.healthy).toHaveLength(1);
+    const healthyLines = result.healthy.split("\n").filter(Boolean);
+    expect(healthyLines).toHaveLength(1);
+    expect(healthyLines[0]).toContain("arch");
     expect(result.prompt).toContain("healthy");
     expect(result.summary.flagged).toBe(0);
   });
@@ -2581,7 +2701,7 @@ describe("graph_status", () => {
     expect(result.formatted).toContain("## Blocked");
   });
 
-  it("shows dependency-blocked as waiting", () => {
+  it("shows dependency-blocked with waiting-on detail", () => {
     const { root } = openProject("stat-dep", "Test", AGENT) as any;
     handlePlan({
       nodes: [
@@ -2593,6 +2713,7 @@ describe("graph_status", () => {
     const result = handleStatus({ project: "stat-dep" }) as any;
     expect(result.formatted).toContain("[ ] First");
     expect(result.formatted).toContain("[~] Second");
+    expect(result.formatted).toContain("waiting on: First");
   });
 
   it("shows inline progress on parent nodes", () => {

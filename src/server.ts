@@ -509,7 +509,7 @@ const TOOLS = [
   {
     name: "graph_retro",
     description:
-      "Run a structured retro on recent work. Call once without findings to get context (recently resolved tasks + evidence since last retro), then call again with categorized findings. Stores retro as a knowledge entry and surfaces CLAUDE.md instruction candidates.",
+      "Run a structured retro on recent work. Call once without findings to get context (recently resolved tasks + evidence since last retro, plus knowledge entries for cross-checking), then call again with categorized findings. Stores retro as a knowledge entry and surfaces CLAUDE.md instruction candidates. Compare resolved work against knowledge entries to detect drift (contradictions, outdated information, nomenclature inconsistency).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -523,11 +523,11 @@ const TOOLS = [
             properties: {
               category: {
                 type: "string",
-                enum: ["claude_md_candidate", "knowledge_gap", "workflow_improvement", "bug_or_debt"],
-                description: "Finding category",
+                enum: ["claude_md_candidate", "knowledge_gap", "workflow_improvement", "bug_or_debt", "knowledge_drift"],
+                description: "Finding category. Use knowledge_drift when a knowledge entry contradicts recent work, uses outdated terminology, or contains stale information.",
               },
               insight: { type: "string", description: "What was observed" },
-              suggestion: { type: "string", description: "For claude_md_candidate: the recommended CLAUDE.md instruction text" },
+              suggestion: { type: "string", description: "For claude_md_candidate: the recommended CLAUDE.md instruction text. For knowledge_drift: which entry to update and how." },
             },
             required: ["category", "insight"],
           },

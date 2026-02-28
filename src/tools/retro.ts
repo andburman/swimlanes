@@ -7,7 +7,7 @@ import { requireString, EngineError } from "../validate.js";
 import type { Evidence } from "../types.js";
 
 export interface RetroFinding {
-  category: "claude_md_candidate" | "knowledge_gap" | "workflow_improvement" | "bug_or_debt";
+  category: "claude_md_candidate" | "knowledge_gap" | "workflow_improvement" | "bug_or_debt" | "knowledge_drift";
   insight: string;
   suggestion?: string; // For claude_md_candidate: the recommended CLAUDE.md instruction text
 }
@@ -31,6 +31,12 @@ export interface RetroContext {
     latest: string | null;
   };
   task_count: number;
+  // Knowledge entries for cross-referencing against resolved work (excerpted to save tokens)
+  knowledge_entries: Array<{
+    key: string;
+    excerpt: string;
+    updated_at: string;
+  }>;
 }
 
 export interface RetroResult {
@@ -112,6 +118,17 @@ export function handleRetro(input: RetroInput, agent: string): RetroResult {
     agent: r.created_by,
   }));
 
+  // Gather knowledge entries for cross-referencing (excerpted to save tokens)
+  const knowledgeRows = db.prepare(
+    "SELECT key, content, updated_at FROM knowledge WHERE project = ? AND key NOT LIKE 'retro-%' ORDER BY updated_at DESC"
+  ).all(project) as Array<{ key: string; content: string; updated_at: string }>;
+
+  const knowledge_entries = knowledgeRows.map(k => ({
+    key: k.key,
+    excerpt: k.content.length > 200 ? k.content.slice(0, 200) + "..." : k.content,
+    updated_at: k.updated_at,
+  }));
+
   const context: RetroContext = {
     resolved_since_last_retro,
     time_span: {
@@ -119,6 +136,7 @@ export function handleRetro(input: RetroInput, agent: string): RetroResult {
       latest: resolvedRows.length > 0 ? resolvedRows[0].updated_at : null,
     },
     task_count: resolvedRows.length,
+    knowledge_entries,
   };
 
   // If no findings provided, return context for the agent to analyze
@@ -126,14 +144,16 @@ export function handleRetro(input: RetroInput, agent: string): RetroResult {
     return {
       project,
       context,
-      hint: context.task_count === 0
-        ? "No resolved tasks since last retro. Nothing to reflect on yet."
-        : `${context.task_count} task(s) resolved since last retro. Review the evidence above, then call graph_retro again with findings.`,
+      hint: context.task_count === 0 && knowledge_entries.length === 0
+        ? "No resolved tasks since last retro and no knowledge entries. Nothing to reflect on yet."
+        : context.task_count === 0
+          ? `No resolved tasks since last retro, but ${knowledge_entries.length} knowledge entry(s) exist. Review for staleness or gaps, then call graph_retro with findings.`
+          : `${context.task_count} task(s) resolved since last retro. ${knowledge_entries.length} knowledge entry(s) to cross-check. Review evidence against knowledge for drift, then call graph_retro with findings.`,
     };
   }
 
   // Validate findings
-  const validCategories = new Set(["claude_md_candidate", "knowledge_gap", "workflow_improvement", "bug_or_debt"]);
+  const validCategories = new Set(["claude_md_candidate", "knowledge_gap", "workflow_improvement", "bug_or_debt", "knowledge_drift"]);
   for (let i = 0; i < input.findings.length; i++) {
     const f = input.findings[i];
     if (!f.category || !validCategories.has(f.category)) {
@@ -177,6 +197,7 @@ export function handleRetro(input: RetroInput, agent: string): RetroResult {
     knowledge_gap: "Knowledge Gaps",
     workflow_improvement: "Workflow Improvements",
     bug_or_debt: "Bugs / Tech Debt",
+    knowledge_drift: "Knowledge Drift",
   };
 
   for (const [cat, findings] of Object.entries(categorized)) {

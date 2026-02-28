@@ -2493,6 +2493,88 @@ describe("graph_retro", () => {
     expect(result.context.resolved_since_last_retro[0].summary).toBe("Task A");
     expect(result.stored).toBeUndefined();
     expect(result.hint).toContain("1 task(s) resolved");
+    expect(result.hint).toContain("knowledge entry(s) to cross-check");
+  });
+
+  it("includes knowledge entries in context for cross-referencing", () => {
+    const { root } = openProject("retro-knowledge", "Test retro knowledge", AGENT) as any;
+
+    // Create knowledge entries
+    handleKnowledgeWrite({ project: "retro-knowledge", key: "architecture", content: "Monorepo with pnpm workspaces and REST API backend" }, AGENT);
+    handleKnowledgeWrite({ project: "retro-knowledge", key: "conventions", content: "Use kebab-case for file names" }, AGENT);
+
+    // Create and resolve a task
+    const plan = handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Migrated to GraphQL" }] }, AGENT);
+    handleUpdate({
+      updates: [{ node_id: plan.created[0].id, resolved: true, add_evidence: [{ type: "note", ref: "Replaced REST with GraphQL" }] }],
+    }, AGENT);
+
+    const result = handleRetro({ project: "retro-knowledge" }, AGENT) as any;
+    expect(result.context.knowledge_entries).toHaveLength(2);
+    expect(result.context.knowledge_entries[0].key).toBeDefined();
+    expect(result.context.knowledge_entries[0].excerpt).toBeDefined();
+    expect(result.context.knowledge_entries[0].updated_at).toBeDefined();
+  });
+
+  it("excludes retro entries from knowledge context", () => {
+    const { root } = openProject("retro-exclude", "Test retro exclude", AGENT) as any;
+
+    // Write a regular knowledge entry
+    handleKnowledgeWrite({ project: "retro-exclude", key: "arch", content: "Notes" }, AGENT);
+
+    // Create, resolve, and run a retro (creates retro-* entry)
+    const plan = handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Task" }] }, AGENT);
+    handleUpdate({
+      updates: [{ node_id: plan.created[0].id, resolved: true, add_evidence: [{ type: "note", ref: "Done" }] }],
+    }, AGENT);
+    handleRetro({
+      project: "retro-exclude",
+      findings: [{ category: "workflow_improvement", insight: "Something" }],
+    }, AGENT);
+
+    // Second retro context should only include non-retro knowledge
+    const plan2 = handlePlan({ nodes: [{ ref: "b", parent_ref: root.id, summary: "Task B" }] }, AGENT);
+    handleUpdate({
+      updates: [{ node_id: plan2.created[0].id, resolved: true, add_evidence: [{ type: "note", ref: "Done B" }] }],
+    }, AGENT);
+    const result = handleRetro({ project: "retro-exclude" }, AGENT) as any;
+    expect(result.context.knowledge_entries).toHaveLength(1);
+    expect(result.context.knowledge_entries[0].key).toBe("arch");
+  });
+
+  it("accepts knowledge_drift findings", () => {
+    const { root } = openProject("retro-drift", "Test drift", AGENT) as any;
+
+    handleKnowledgeWrite({ project: "retro-drift", key: "api-style", content: "REST API with Express" }, AGENT);
+    const plan = handlePlan({ nodes: [{ ref: "a", parent_ref: root.id, summary: "Migrated to GraphQL" }] }, AGENT);
+    handleUpdate({
+      updates: [{ node_id: plan.created[0].id, resolved: true, add_evidence: [{ type: "note", ref: "Replaced REST with GraphQL" }] }],
+    }, AGENT);
+
+    const result = handleRetro({
+      project: "retro-drift",
+      findings: [
+        { category: "knowledge_drift", insight: "Knowledge entry 'api-style' says REST but we migrated to GraphQL", suggestion: "Update 'api-style' to reflect GraphQL migration" },
+      ],
+    }, AGENT) as any;
+
+    expect(result.stored.finding_count).toBe(1);
+    // Verify stored content includes Knowledge Drift section
+    const knowledge = handleKnowledgeRead({ project: "retro-drift" }) as any;
+    const retroEntry = knowledge.entries.find((e: any) => e.key.startsWith("retro-"));
+    expect(retroEntry.content).toContain("Knowledge Drift");
+    expect(retroEntry.content).toContain("api-style");
+  });
+
+  it("truncates long knowledge excerpts", () => {
+    openProject("retro-trunc", "Test truncation", AGENT);
+
+    const longContent = "A".repeat(300);
+    handleKnowledgeWrite({ project: "retro-trunc", key: "long-entry", content: longContent }, AGENT);
+
+    const result = handleRetro({ project: "retro-trunc" }, AGENT) as any;
+    expect(result.context.knowledge_entries[0].excerpt.length).toBeLessThanOrEqual(204); // 200 + "..."
+    expect(result.context.knowledge_entries[0].excerpt).toContain("...");
   });
 
   it("stores findings as knowledge entry", () => {
@@ -2598,11 +2680,12 @@ describe("graph_retro", () => {
     ).toThrow(/category must be one of/);
   });
 
-  it("returns empty context when no tasks resolved", () => {
+  it("returns empty context when no tasks resolved and no knowledge", () => {
     openProject("retro-empty", "Test retro", AGENT);
 
     const result = handleRetro({ project: "retro-empty" }, AGENT) as any;
     expect(result.context.task_count).toBe(0);
+    expect(result.context.knowledge_entries).toEqual([]);
     expect(result.hint).toContain("Nothing to reflect on");
   });
 

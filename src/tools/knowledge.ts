@@ -3,6 +3,31 @@ import { getDb } from "../db.js";
 import { getProjectRoot, listProjects } from "../nodes.js";
 import { EngineError, requireString } from "../validate.js";
 
+/** Check if two normalized keys are suspiciously similar */
+function keySimilarity(a: string, b: string): number {
+  if (a === b) return 1;
+  const short = a.length <= b.length ? a : b;
+  const long = a.length <= b.length ? b : a;
+  if (long.startsWith(short) && short.length >= 3) return 0.8;
+  if (long.includes(short) && short.length >= 3) return 0.7;
+  let maxLen = 0;
+  for (let i = 0; i < short.length; i++) {
+    for (let j = i + 1; j <= short.length; j++) {
+      const sub = short.slice(i, j);
+      if (long.includes(sub) && sub.length > maxLen) maxLen = sub.length;
+    }
+  }
+  return (2 * maxLen) / (a.length + b.length);
+}
+
+function findSimilarKeys(targetKey: string, existingKeys: string[]): string[] {
+  const normalized = targetKey.toLowerCase().replace(/[-_]/g, "");
+  return existingKeys.filter(k => {
+    const norm = k.toLowerCase().replace(/[-_]/g, "");
+    return norm !== normalized && keySimilarity(normalized, norm) >= 0.6;
+  });
+}
+
 function requireProject(project: string) {
   const root = getProjectRoot(project);
   if (!root) {
@@ -65,13 +90,23 @@ export function handleKnowledgeWrite(input: KnowledgeWriteInput, agent: string) 
     db.prepare(
       "UPDATE knowledge SET content = ?, source_node = COALESCE(?, source_node), updated_at = ? WHERE id = ?"
     ).run(content, sourceNode, now, existing.id);
-    return { key, action: "updated" };
+    return { key, action: "updated" as const };
   } else {
     const id = nanoid();
     db.prepare(
       "INSERT INTO knowledge (id, project, key, content, source_node, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(id, project, key, content, sourceNode, agent, now, now);
-    return { key, action: "created" };
+
+    // Check for similar existing keys to surface potential overlaps
+    const allKeys = db.prepare(
+      "SELECT key FROM knowledge WHERE project = ? AND key != ? AND key NOT LIKE 'retro-%'"
+    ).all(project, key) as Array<{ key: string }>;
+    const similar = findSimilarKeys(key, allKeys.map(r => r.key));
+
+    if (similar.length > 0) {
+      return { key, action: "created" as const, similar_keys: similar };
+    }
+    return { key, action: "created" as const };
   }
 }
 

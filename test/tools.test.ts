@@ -1536,6 +1536,32 @@ describe("graph_knowledge", () => {
     const read = handleKnowledgeRead({ project: "kb-src3", key: "orphan" }) as any;
     expect(read.source_node).toBeNull();
   });
+
+  it("surfaces similar_keys when creating an entry that overlaps existing keys", () => {
+    handleOpen({ project: "kb-overlap", goal: "Test overlap detection" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-overlap", key: "auth", content: "JWT tokens" }, AGENT);
+    const result = handleKnowledgeWrite({ project: "kb-overlap", key: "authentication", content: "OAuth flow" }, AGENT) as any;
+    expect(result.action).toBe("created");
+    expect(result.similar_keys).toContain("auth");
+  });
+
+  it("does not include similar_keys when no overlap exists", () => {
+    handleOpen({ project: "kb-no-overlap", goal: "Test no overlap" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-no-overlap", key: "database", content: "Postgres" }, AGENT);
+    const result = handleKnowledgeWrite({ project: "kb-no-overlap", key: "auth", content: "JWT" }, AGENT) as any;
+    expect(result.action).toBe("created");
+    expect(result.similar_keys).toBeUndefined();
+  });
+
+  it("does not surface similar_keys on updates", () => {
+    handleOpen({ project: "kb-update-overlap", goal: "Test update" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-update-overlap", key: "auth", content: "v1" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-update-overlap", key: "authentication", content: "v1" }, AGENT);
+    // Update existing — should not check for overlaps
+    const result = handleKnowledgeWrite({ project: "kb-update-overlap", key: "auth", content: "v2" }, AGENT) as any;
+    expect(result.action).toBe("updated");
+    expect(result.similar_keys).toBeUndefined();
+  });
 });
 
 describe("graph_knowledge_audit", () => {

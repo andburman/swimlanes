@@ -13,7 +13,7 @@ import { handleOnboard } from "../src/tools/onboard.js";
 import { handleAgentConfig } from "../src/tools/agent-config.js";
 import { handleTree } from "../src/tools/tree.js";
 import { handleStatus } from "../src/tools/status.js";
-import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch } from "../src/tools/knowledge.js";
+import { handleKnowledgeWrite, handleKnowledgeRead, handleKnowledgeDelete, handleKnowledgeSearch, getKnowledgeLog } from "../src/tools/knowledge.js";
 import { handleRetro } from "../src/tools/retro.js";
 import { handleKnowledgeAudit } from "../src/tools/knowledge-audit.js";
 import { handleResolve } from "../src/tools/resolve.js";
@@ -1483,7 +1483,7 @@ describe("graph_knowledge", () => {
     handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
     handleKnowledgeWrite({ project: "kb-test", key: "temp", content: "data" }, AGENT);
 
-    const del = handleKnowledgeDelete({ project: "kb-test", key: "temp" });
+    const del = handleKnowledgeDelete({ project: "kb-test", key: "temp" }, AGENT);
     expect(del.action).toBe("deleted");
 
     expect(() => handleKnowledgeRead({ project: "kb-test", key: "temp" }))
@@ -1492,7 +1492,7 @@ describe("graph_knowledge", () => {
 
   it("throws when deleting non-existent key", () => {
     handleOpen({ project: "kb-test", goal: "Test knowledge" }, AGENT);
-    expect(() => handleKnowledgeDelete({ project: "kb-test", key: "nope" }))
+    expect(() => handleKnowledgeDelete({ project: "kb-test", key: "nope" }, AGENT))
       .toThrow("not found");
   });
 
@@ -1537,6 +1537,45 @@ describe("graph_knowledge", () => {
     expect(read.source_node).toBeNull();
   });
 
+  it("includes freshness signal on single-entry read", () => {
+    handleOpen({ project: "kb-fresh", goal: "Freshness test" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-fresh", key: "arch", content: "Monolith" }, AGENT);
+    const result = handleKnowledgeRead({ project: "kb-fresh", key: "arch" }) as any;
+    expect(result.days_since_update).toBeGreaterThanOrEqual(0);
+    // source_node_resolved is null when no source node (no claimed task)
+    expect(result.source_node_resolved).toBeNull();
+  });
+
+  it("includes freshness signal on list-all read", () => {
+    handleOpen({ project: "kb-fresh-list", goal: "List freshness test" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-fresh-list", key: "a", content: "A" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-fresh-list", key: "b", content: "B" }, AGENT);
+    const result = handleKnowledgeRead({ project: "kb-fresh-list" }) as any;
+    expect(result.entries).toHaveLength(2);
+    for (const entry of result.entries) {
+      expect(entry.days_since_update).toBeGreaterThanOrEqual(0);
+      expect(entry).toHaveProperty("source_node_resolved");
+    }
+  });
+
+  it("returns source_node_resolved correctly for active and resolved nodes", () => {
+    const { root } = handleOpen({ project: "kb-fresh-src", goal: "Source node freshness" }, AGENT) as any;
+    handleUpdate({ updates: [{ node_id: root.id, discovery: "done" }] }, AGENT);
+    handlePlan({ nodes: [{ ref: "t1", summary: "Task", parent_ref: root.id }] }, AGENT);
+    const next = handleNext({ project: "kb-fresh-src", claim: true }, AGENT) as any;
+    const taskId = next.nodes[0].node.id;
+
+    // Write knowledge while task is active
+    handleKnowledgeWrite({ project: "kb-fresh-src", key: "info", content: "Active context" }, AGENT);
+    const activeRead = handleKnowledgeRead({ project: "kb-fresh-src", key: "info" }) as any;
+    expect(activeRead.source_node_resolved).toBe(false);
+
+    // Resolve the task
+    handleUpdate({ updates: [{ node_id: taskId, resolved: true, add_evidence: [{ type: "note", ref: "Done" }] }] }, AGENT);
+    const resolvedRead = handleKnowledgeRead({ project: "kb-fresh-src", key: "info" }) as any;
+    expect(resolvedRead.source_node_resolved).toBe(true);
+  });
+
   it("surfaces similar_keys when creating an entry that overlaps existing keys", () => {
     handleOpen({ project: "kb-overlap", goal: "Test overlap detection" }, AGENT);
     handleKnowledgeWrite({ project: "kb-overlap", key: "auth", content: "JWT tokens" }, AGENT);
@@ -1562,53 +1601,140 @@ describe("graph_knowledge", () => {
     expect(result.action).toBe("updated");
     expect(result.similar_keys).toBeUndefined();
   });
+
+  it("logs create mutation", () => {
+    handleOpen({ project: "kb-log-create", goal: "Log test" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-log-create", key: "arch", content: "Monolith" }, AGENT);
+    const log = getKnowledgeLog("kb-log-create", "arch");
+    expect(log).toHaveLength(1);
+    expect(log[0].action).toBe("created");
+    expect(log[0].old_content).toBeNull();
+    expect(log[0].new_content).toBe("Monolith");
+  });
+
+  it("logs update mutation with old and new content", () => {
+    handleOpen({ project: "kb-log-update", goal: "Log test" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-log-update", key: "arch", content: "Monolith" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-log-update", key: "arch", content: "Microservices" }, AGENT);
+    const log = getKnowledgeLog("kb-log-update", "arch");
+    expect(log).toHaveLength(2);
+    const updateEntry = log.find(e => e.action === "updated");
+    expect(updateEntry).toBeDefined();
+    expect(updateEntry!.old_content).toBe("Monolith");
+    expect(updateEntry!.new_content).toBe("Microservices");
+    expect(log.find(e => e.action === "created")).toBeDefined();
+  });
+
+  it("logs delete mutation with old content", () => {
+    handleOpen({ project: "kb-log-delete", goal: "Log test" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-log-delete", key: "temp", content: "Temporary" }, AGENT);
+    handleKnowledgeDelete({ project: "kb-log-delete", key: "temp" }, AGENT);
+    const log = getKnowledgeLog("kb-log-delete", "temp");
+    expect(log).toHaveLength(2);
+    const deleteEntry = log.find(e => e.action === "deleted");
+    expect(deleteEntry).toBeDefined();
+    expect(deleteEntry!.old_content).toBe("Temporary");
+    expect(deleteEntry!.new_content).toBeNull();
+  });
+
+  it("stores and returns category on knowledge entries", () => {
+    handleOpen({ project: "kb-cat", goal: "Category test" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-cat", key: "db-schema", content: "Postgres", category: "architecture" }, AGENT);
+    const read = handleKnowledgeRead({ project: "kb-cat", key: "db-schema" }) as any;
+    expect(read.category).toBe("architecture");
+  });
+
+  it("defaults category to general when not specified", () => {
+    handleOpen({ project: "kb-cat-default", goal: "Category default" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-cat-default", key: "misc", content: "Notes" }, AGENT);
+    const read = handleKnowledgeRead({ project: "kb-cat-default", key: "misc" }) as any;
+    expect(read.category).toBe("general");
+  });
+
+  it("rejects invalid categories", () => {
+    handleOpen({ project: "kb-cat-invalid", goal: "Invalid cat" }, AGENT);
+    expect(() => handleKnowledgeWrite({ project: "kb-cat-invalid", key: "x", content: "y", category: "bogus" as any }, AGENT))
+      .toThrow("Invalid category");
+  });
+
+  it("returns category in list-all mode", () => {
+    handleOpen({ project: "kb-cat-list", goal: "Category list" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-cat-list", key: "a", content: "A", category: "decision" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-cat-list", key: "b", content: "B", category: "convention" }, AGENT);
+    const result = handleKnowledgeRead({ project: "kb-cat-list" }) as any;
+    const categories = result.entries.map((e: any) => e.category);
+    expect(categories).toContain("decision");
+    expect(categories).toContain("convention");
+  });
+
+  it("flags same_category_overlap when overlapping keys share a category", () => {
+    handleOpen({ project: "kb-cat-overlap", goal: "Category overlap" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-cat-overlap", key: "auth", content: "JWT", category: "architecture" }, AGENT);
+    const result = handleKnowledgeWrite({ project: "kb-cat-overlap", key: "authentication", content: "OAuth", category: "architecture" }, AGENT) as any;
+    expect(result.similar_keys).toContain("auth");
+    expect(result.same_category_overlap).toContain("auth");
+  });
+
+  it("does not flag same_category_overlap when categories differ", () => {
+    handleOpen({ project: "kb-cat-diff", goal: "Different categories" }, AGENT);
+    handleKnowledgeWrite({ project: "kb-cat-diff", key: "auth", content: "JWT", category: "architecture" }, AGENT);
+    const result = handleKnowledgeWrite({ project: "kb-cat-diff", key: "authentication", content: "Login flow docs", category: "convention" }, AGENT) as any;
+    expect(result.similar_keys).toContain("auth");
+    expect(result.same_category_overlap).toBeUndefined();
+  });
 });
 
 describe("graph_knowledge_audit", () => {
   it("returns empty result when no knowledge entries exist", () => {
     handleOpen({ project: "audit-empty", goal: "No knowledge" }, AGENT);
     const result = handleKnowledgeAudit({ project: "audit-empty" }) as any;
-    expect(result.entries).toHaveLength(0);
+    expect(result.flagged).toHaveLength(0);
+    expect(result.healthy).toHaveLength(0);
     expect(result.summary.total).toBe(0);
     expect(result.prompt).toBe("No knowledge entries to audit.");
   });
 
-  it("returns entries with staleness and source node status", () => {
+  it("classifies healthy entries with minimal data", () => {
     const { root } = handleOpen({ project: "audit-basic", goal: "Test audit" }, AGENT) as any;
     handleUpdate({ updates: [{ node_id: root.id, discovery: "done" }] }, AGENT);
     // Create a task and claim it so knowledge gets a source_node
     handlePlan({
       nodes: [{ ref: "t1", summary: "Task one", parent_ref: root.id }],
     }, AGENT);
-    const next = handleNext({ project: "audit-basic", claim: true }, AGENT) as any;
-    const taskId = next.nodes[0].node.id;
+    handleNext({ project: "audit-basic", claim: true }, AGENT);
 
     handleKnowledgeWrite({ project: "audit-basic", key: "arch", content: "Monolith architecture" }, AGENT);
     handleKnowledgeWrite({ project: "audit-basic", key: "api", content: "REST API v2" }, AGENT);
 
     const result = handleKnowledgeAudit({ project: "audit-basic" }) as any;
-    expect(result.entries).toHaveLength(2);
     expect(result.summary.total).toBe(2);
+    // Both entries are healthy — active source, fresh, no overlap
+    expect(result.healthy).toHaveLength(2);
+    expect(result.flagged).toHaveLength(0);
 
-    // Both entries should have source_node pointing to the claimed task
-    for (const entry of result.entries) {
-      expect(entry.source_node.status).toBe("active");
-      expect(entry.source_node.id).toBe(taskId);
+    // Healthy entries have minimal shape: key + category + days_stale only
+    for (const entry of result.healthy) {
+      expect(entry.key).toBeDefined();
+      expect(entry.category).toBe("general");
       expect(entry.days_stale).toBeGreaterThanOrEqual(0);
+      expect(entry.content).toBeUndefined(); // no content for healthy
     }
   });
 
-  it("detects missing source nodes", () => {
+  it("flags entries with missing source nodes", () => {
     handleOpen({ project: "audit-orphan", goal: "Orphan test" }, AGENT);
     // Write knowledge with no claimed task — source_node will be null
     handleKnowledgeWrite({ project: "audit-orphan", key: "stale", content: "Some old info" }, AGENT);
 
     const result = handleKnowledgeAudit({ project: "audit-orphan" }) as any;
-    expect(result.entries[0].source_node.status).toBe("missing");
+    expect(result.flagged).toHaveLength(1);
+    expect(result.flagged[0].source_node.status).toBe("missing");
+    expect(result.flagged[0].flags).toContain("orphaned");
+    expect(result.flagged[0].content).toBe("Some old info"); // flagged entries include content
     expect(result.summary.missing_source).toBe(1);
   });
 
-  it("detects resolved source nodes", () => {
+  it("classifies entries with resolved source as healthy", () => {
     const { root } = handleOpen({ project: "audit-resolved", goal: "Resolved test" }, AGENT) as any;
     handleUpdate({ updates: [{ node_id: root.id, discovery: "done" }] }, AGENT);
     handlePlan({
@@ -1629,10 +1755,12 @@ describe("graph_knowledge_audit", () => {
     }, AGENT);
 
     const result = handleKnowledgeAudit({ project: "audit-resolved" }) as any;
-    expect(result.entries[0].source_node.status).toBe("resolved");
+    // Resolved source node is not a flag — it's normal
+    expect(result.healthy).toHaveLength(1);
+    expect(result.healthy[0].key).toBe("decision");
   });
 
-  it("detects similar keys", () => {
+  it("flags entries with similar keys and includes content", () => {
     handleOpen({ project: "audit-overlap", goal: "Overlap test" }, AGENT);
     handleKnowledgeWrite({ project: "audit-overlap", key: "auth", content: "JWT tokens" }, AGENT);
     handleKnowledgeWrite({ project: "audit-overlap", key: "authentication", content: "OAuth flow" }, AGENT);
@@ -1640,16 +1768,15 @@ describe("graph_knowledge_audit", () => {
 
     const result = handleKnowledgeAudit({ project: "audit-overlap" }) as any;
 
-    // auth and authentication should be flagged as similar
-    const authEntry = result.entries.find((e: any) => e.key === "auth");
+    // auth and authentication should be flagged with overlap + orphaned (no source)
+    expect(result.flagged.length).toBeGreaterThanOrEqual(2);
+    const authEntry = result.flagged.find((e: any) => e.key === "auth");
     expect(authEntry.similar_keys).toContain("authentication");
+    expect(authEntry.flags).toContain("overlap");
+    expect(authEntry.content).toBe("JWT tokens"); // flagged entries include content
 
-    const authNEntry = result.entries.find((e: any) => e.key === "authentication");
+    const authNEntry = result.flagged.find((e: any) => e.key === "authentication");
     expect(authNEntry.similar_keys).toContain("auth");
-
-    // database should not be similar to auth
-    const dbEntry = result.entries.find((e: any) => e.key === "database");
-    expect(dbEntry.similar_keys).toHaveLength(0);
 
     expect(result.summary.potential_overlaps).toBeGreaterThan(0);
   });
@@ -1665,20 +1792,40 @@ describe("graph_knowledge_audit", () => {
     }, AGENT);
 
     const result = handleKnowledgeAudit({ project: "audit-retro" }) as any;
-    // Should only contain the real knowledge entry, not the retro
-    expect(result.entries).toHaveLength(1);
-    expect(result.entries[0].key).toBe("arch");
+    // Should only contain the real knowledge entry, not the retro — it's orphaned so flagged
+    const total = result.flagged.length + result.healthy.length;
+    expect(total).toBe(1);
+    const entry = result.flagged[0] || result.healthy[0];
+    expect(entry.key).toBe("arch");
   });
 
-  it("includes analysis prompt with overlap info", () => {
+  it("includes analysis prompt with overlap info when flagged", () => {
     handleOpen({ project: "audit-prompt", goal: "Prompt test" }, AGENT);
     handleKnowledgeWrite({ project: "audit-prompt", key: "api", content: "REST" }, AGENT);
     handleKnowledgeWrite({ project: "audit-prompt", key: "api-v2", content: "GraphQL" }, AGENT);
 
     const result = handleKnowledgeAudit({ project: "audit-prompt" }) as any;
+    expect(result.flagged.length).toBeGreaterThan(0);
     expect(result.prompt).toContain("Contradictions");
     expect(result.prompt).toContain("Nomenclature drift");
     expect(result.prompt).toContain("overlaps detected");
+  });
+
+  it("returns 'all healthy' prompt when no entries are flagged", () => {
+    const { root } = handleOpen({ project: "audit-healthy", goal: "All healthy" }, AGENT) as any;
+    handleUpdate({ updates: [{ node_id: root.id, discovery: "done" }] }, AGENT);
+    handlePlan({
+      nodes: [{ ref: "t1", summary: "Task", parent_ref: root.id }],
+    }, AGENT);
+    handleNext({ project: "audit-healthy", claim: true }, AGENT);
+
+    handleKnowledgeWrite({ project: "audit-healthy", key: "arch", content: "Clean architecture" }, AGENT);
+
+    const result = handleKnowledgeAudit({ project: "audit-healthy" }) as any;
+    expect(result.flagged).toHaveLength(0);
+    expect(result.healthy).toHaveLength(1);
+    expect(result.prompt).toContain("healthy");
+    expect(result.summary.flagged).toBe(0);
   });
 
   it("throws for unknown project", () => {
@@ -2842,6 +2989,112 @@ describe("graph_retro", () => {
     expect(() =>
       handleRetro({ project: "nonexistent" }, AGENT)
     ).toThrow(/Project not found/);
+  });
+
+  it("detects possibly stale knowledge when source files were modified by later tasks", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-15T10:00:00.000Z"));
+      const { root } = openProject("retro-drift-detect", "Test drift detection", AGENT) as any;
+
+      // Create a task, claim it, write knowledge linked to it
+      const plan1 = handlePlan({ nodes: [{ ref: "t1", parent_ref: root.id, summary: "Build auth" }] }, AGENT);
+      const t1Id = plan1.created[0].id;
+      handleNext({ project: "retro-drift-detect", claim: true }, AGENT);
+      handleKnowledgeWrite({ project: "retro-drift-detect", key: "auth-strategy", content: "Using JWT with Express middleware" }, AGENT);
+
+      // Resolve t1 with context_links covering auth files
+      handleUpdate({
+        updates: [{
+          node_id: t1Id,
+          resolved: true,
+          add_evidence: [{ type: "note", ref: "Built JWT auth" }],
+          add_context_links: ["src/auth.ts", "src/middleware.ts"],
+        }],
+      }, AGENT);
+
+      // Advance time — a later task modifies the same files
+      vi.setSystemTime(new Date("2026-01-20T10:00:00.000Z"));
+      const plan2 = handlePlan({ nodes: [{ ref: "t2", parent_ref: root.id, summary: "Refactor auth to OAuth" }] }, AGENT);
+      handleUpdate({
+        updates: [{
+          node_id: plan2.created[0].id,
+          resolved: true,
+          add_evidence: [{ type: "note", ref: "Migrated to OAuth" }],
+          add_context_links: ["src/auth.ts", "src/oauth.ts"],
+        }],
+      }, AGENT);
+
+      // Run retro — should detect that auth-strategy knowledge may be stale
+      const result = handleRetro({ project: "retro-drift-detect" }, AGENT) as any;
+      expect(result.context.possibly_stale).toHaveLength(1);
+      expect(result.context.possibly_stale[0].key).toBe("auth-strategy");
+      expect(result.context.possibly_stale[0].overlapping_files).toContain("src/auth.ts");
+      expect(result.context.possibly_stale[0].resolved_task.summary).toBe("Refactor auth to OAuth");
+      expect(result.hint).toContain("may be stale");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not flag knowledge when no files overlap", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-15T10:00:00.000Z"));
+      const { root } = openProject("retro-no-drift", "No drift", AGENT) as any;
+
+      // Create task, claim, write knowledge
+      const plan1 = handlePlan({ nodes: [{ ref: "t1", parent_ref: root.id, summary: "Build DB layer" }] }, AGENT);
+      handleNext({ project: "retro-no-drift", claim: true }, AGENT);
+      handleKnowledgeWrite({ project: "retro-no-drift", key: "db-schema", content: "Using Postgres with Prisma" }, AGENT);
+      handleUpdate({
+        updates: [{
+          node_id: plan1.created[0].id,
+          resolved: true,
+          add_evidence: [{ type: "note", ref: "Built DB" }],
+          add_context_links: ["src/db.ts", "prisma/schema.prisma"],
+        }],
+      }, AGENT);
+
+      // Later task touches completely different files
+      vi.setSystemTime(new Date("2026-01-20T10:00:00.000Z"));
+      const plan2 = handlePlan({ nodes: [{ ref: "t2", parent_ref: root.id, summary: "Build UI" }] }, AGENT);
+      handleUpdate({
+        updates: [{
+          node_id: plan2.created[0].id,
+          resolved: true,
+          add_evidence: [{ type: "note", ref: "Built UI" }],
+          add_context_links: ["src/components/App.tsx", "src/styles.css"],
+        }],
+      }, AGENT);
+
+      const result = handleRetro({ project: "retro-no-drift" }, AGENT) as any;
+      expect(result.context.possibly_stale).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips knowledge entries without source_node for drift detection", () => {
+    const { root } = openProject("retro-no-source", "No source", AGENT) as any;
+
+    // Write knowledge with no claimed task — no source_node
+    handleKnowledgeWrite({ project: "retro-no-source", key: "general-notes", content: "Some notes" }, AGENT);
+
+    // Resolve a task with context_links
+    const plan = handlePlan({ nodes: [{ ref: "t1", parent_ref: root.id, summary: "Task" }] }, AGENT);
+    handleUpdate({
+      updates: [{
+        node_id: plan.created[0].id,
+        resolved: true,
+        add_evidence: [{ type: "note", ref: "Done" }],
+        add_context_links: ["src/foo.ts"],
+      }],
+    }, AGENT);
+
+    const result = handleRetro({ project: "retro-no-source" }, AGENT) as any;
+    // No drift detected — entry has no source_node to compare files against
+    expect(result.context.possibly_stale).toHaveLength(0);
   });
 });
 

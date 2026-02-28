@@ -18,6 +18,14 @@ export interface RetroInput {
   findings?: RetroFinding[];
 }
 
+// [sl:FhKURi7DKn26uqy4OazHN] Server-side drift detection — concrete file-level staleness signals
+export interface PossiblyStaleEntry {
+  key: string;
+  overlapping_files: string[];
+  resolved_task: { id: string; summary: string; resolved_at: string };
+  days_since_knowledge_update: number;
+}
+
 export interface RetroContext {
   resolved_since_last_retro: Array<{
     id: string;
@@ -37,6 +45,8 @@ export interface RetroContext {
     excerpt: string;
     updated_at: string;
   }>;
+  // Entries whose source files were touched by tasks resolved after the entry was last updated
+  possibly_stale: PossiblyStaleEntry[];
 }
 
 export interface RetroResult {
@@ -48,6 +58,67 @@ export interface RetroResult {
     claude_md_candidates: Array<{ insight: string; suggestion: string }>;
   };
   hint: string;
+}
+
+// [sl:FhKURi7DKn26uqy4OazHN] Detect knowledge entries that may be stale based on file overlap
+function detectDrift(
+  db: ReturnType<typeof getDb>,
+  project: string,
+  knowledgeRows: Array<{ key: string; content: string; updated_at: string; source_node: string | null }>,
+): PossiblyStaleEntry[] {
+  // Get knowledge entries that have a source_node
+  const withSource = knowledgeRows.filter(k => k.source_node !== null);
+  if (withSource.length === 0) return [];
+
+  // Batch-fetch source nodes and their context_links
+  const sourceIds = [...new Set(withSource.map(k => k.source_node!))];
+  const placeholders = sourceIds.map(() => "?").join(",");
+  const sourceNodeRows = db.prepare(
+    `SELECT id, context_links FROM nodes WHERE id IN (${placeholders})`
+  ).all(...sourceIds) as Array<{ id: string; context_links: string }>;
+
+  const sourceFileMap = new Map<string, string[]>();
+  for (const row of sourceNodeRows) {
+    const links = JSON.parse(row.context_links) as string[];
+    if (links.length > 0) sourceFileMap.set(row.id, links);
+  }
+
+  if (sourceFileMap.size === 0) return [];
+
+  const results: PossiblyStaleEntry[] = [];
+  const now = Date.now();
+
+  for (const k of withSource) {
+    const sourceFiles = sourceFileMap.get(k.source_node!);
+    if (!sourceFiles || sourceFiles.length === 0) continue;
+
+    // Find resolved tasks in this project that:
+    // 1. Were resolved after this knowledge entry was last updated
+    // 2. Have context_links that overlap with the source node's files
+    const resolvedAfter = db.prepare(
+      `SELECT id, summary, context_links, updated_at FROM nodes
+       WHERE project = ? AND resolved = 1 AND updated_at > ? AND id != ?
+       ORDER BY updated_at DESC LIMIT 100`
+    ).all(project, k.updated_at, k.source_node!) as Array<{
+      id: string; summary: string; context_links: string; updated_at: string;
+    }>;
+
+    for (const task of resolvedAfter) {
+      const taskFiles = JSON.parse(task.context_links) as string[];
+      const overlapping = taskFiles.filter(f => sourceFiles.includes(f));
+      if (overlapping.length > 0) {
+        results.push({
+          key: k.key,
+          overlapping_files: overlapping,
+          resolved_task: { id: task.id, summary: task.summary, resolved_at: task.updated_at },
+          days_since_knowledge_update: Math.floor((now - new Date(k.updated_at).getTime()) / (1000 * 60 * 60 * 24)),
+        });
+        break; // One signal per entry is enough — most recent overlapping task
+      }
+    }
+  }
+
+  return results;
 }
 
 export function handleRetro(input: RetroInput, agent: string): RetroResult {
@@ -120,14 +191,18 @@ export function handleRetro(input: RetroInput, agent: string): RetroResult {
 
   // Gather knowledge entries for cross-referencing (excerpted to save tokens)
   const knowledgeRows = db.prepare(
-    "SELECT key, content, updated_at FROM knowledge WHERE project = ? AND key NOT LIKE 'retro-%' ORDER BY updated_at DESC"
-  ).all(project) as Array<{ key: string; content: string; updated_at: string }>;
+    "SELECT key, content, source_node, updated_at FROM knowledge WHERE project = ? AND key NOT LIKE 'retro-%' ORDER BY updated_at DESC"
+  ).all(project) as Array<{ key: string; content: string; source_node: string | null; updated_at: string }>;
 
   const knowledge_entries = knowledgeRows.map(k => ({
     key: k.key,
     excerpt: k.content.length > 200 ? k.content.slice(0, 200) + "..." : k.content,
     updated_at: k.updated_at,
   }));
+
+  // [sl:FhKURi7DKn26uqy4OazHN] Server-side drift detection: find knowledge entries whose source files
+  // were modified by tasks resolved after the entry was last updated
+  const possibly_stale = detectDrift(db, project, knowledgeRows);
 
   const context: RetroContext = {
     resolved_since_last_retro,
@@ -137,18 +212,22 @@ export function handleRetro(input: RetroInput, agent: string): RetroResult {
     },
     task_count: resolvedRows.length,
     knowledge_entries,
+    possibly_stale,
   };
 
   // If no findings provided, return context for the agent to analyze
   if (!input.findings || input.findings.length === 0) {
+    const driftNote = possibly_stale.length > 0
+      ? ` ${possibly_stale.length} knowledge entry(s) may be stale — files they cover were modified by recent tasks.`
+      : "";
     return {
       project,
       context,
       hint: context.task_count === 0 && knowledge_entries.length === 0
         ? "No resolved tasks since last retro and no knowledge entries. Nothing to reflect on yet."
         : context.task_count === 0
-          ? `No resolved tasks since last retro, but ${knowledge_entries.length} knowledge entry(s) exist. Review for staleness or gaps, then call graph_retro with findings.`
-          : `${context.task_count} task(s) resolved since last retro. ${knowledge_entries.length} knowledge entry(s) to cross-check. Review evidence against knowledge for drift, then call graph_retro with findings.`,
+          ? `No resolved tasks since last retro, but ${knowledge_entries.length} knowledge entry(s) exist.${driftNote} Review for staleness or gaps, then call graph_retro with findings.`
+          : `${context.task_count} task(s) resolved since last retro. ${knowledge_entries.length} knowledge entry(s) to cross-check.${driftNote} Review evidence against knowledge for drift, then call graph_retro with findings.`,
     };
   }
 

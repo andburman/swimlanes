@@ -109,6 +109,20 @@ function migrate(db: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge(project);
+
+    CREATE TABLE IF NOT EXISTS knowledge_log (
+      id TEXT PRIMARY KEY,
+      project TEXT NOT NULL,
+      key TEXT NOT NULL,
+      action TEXT NOT NULL,
+      old_content TEXT,
+      new_content TEXT,
+      agent TEXT NOT NULL,
+      timestamp TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_knowledge_log_project ON knowledge_log(project);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_log_key ON knowledge_log(project, key);
   `);
 
   // Check which ALTER TABLE migrations are needed
@@ -164,6 +178,11 @@ function migrate(db: Database.Database): void {
   if (!knowledgeCols.has("source_node")) {
     db.exec("ALTER TABLE knowledge ADD COLUMN source_node TEXT DEFAULT NULL");
     db.exec("CREATE INDEX IF NOT EXISTS idx_knowledge_source_node ON knowledge(source_node)");
+  }
+
+  // [sl:1he9vXC_fddZDHHN1J_JG] Add category to knowledge entries
+  if (!knowledgeCols.has("category")) {
+    db.exec("ALTER TABLE knowledge ADD COLUMN category TEXT NOT NULL DEFAULT 'general'");
   }
 }
 

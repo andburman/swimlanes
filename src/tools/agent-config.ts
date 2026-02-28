@@ -162,6 +162,14 @@ When you learn something that future sessions would benefit from (conventions, e
 graph_knowledge_write({ project: "<project-name>", key: "<topic>", content: "..." })
 \`\`\`
 
+**Before writing, always check existing entries** with \`graph_knowledge_read({ project })\` to see what already exists. Prefer updating an existing entry over creating a new one — this prevents duplicate or overlapping entries from accumulating.
+
+**Key naming conventions:**
+- Lowercase, hyphenated: \`auth-strategy\`, \`db-schema\`, \`api-versioning\`, \`deploy-process\`
+- Be specific: \`error-handling-patterns\` not \`errors\`, \`test-conventions\` not \`tests\`
+- Use prefixes for related groups: \`api-auth\`, \`api-versioning\`, \`api-rate-limits\`
+- If the write response includes \`similar_keys\`, check those entries — you may want to merge rather than create a new one
+
 # Record observations proactively
 
 Graph is the project memory across sessions. If something isn't in Graph, it's effectively forgotten. While working, record things you notice — even if they're not part of your current task:

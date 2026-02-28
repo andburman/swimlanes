@@ -14,25 +14,36 @@ interface SourceNodeInfo {
   resolved: boolean;
 }
 
-export interface AuditEntry {
+// [sl:axlgmY3g9Dbl6BDLOX8-M] Token-optimized audit: flagged entries get full detail, healthy entries get minimal shape
+export interface FlaggedEntry {
   key: string;
   content: string;
+  category: string;
   updated_at: string;
   created_by: string;
   days_stale: number;
+  flags: string[]; // e.g. ["stale", "overlap", "orphaned"]
   source_node: {
     status: "active" | "resolved" | "missing";
     id?: string;
     summary?: string;
   };
-  similar_keys: string[]; // other keys that look like potential overlaps
+  similar_keys: string[];
+}
+
+export interface HealthyEntry {
+  key: string;
+  category: string;
+  days_stale: number;
 }
 
 export interface KnowledgeAuditResult {
   project: string;
-  entries: AuditEntry[];
+  flagged: FlaggedEntry[];
+  healthy: HealthyEntry[];
   summary: {
     total: number;
+    flagged: number;
     stale_30d: number;
     missing_source: number;
     potential_overlaps: number;
@@ -109,10 +120,11 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
 
   // Get all non-retro knowledge entries
   const rows = db.prepare(
-    "SELECT key, content, source_node, updated_at, created_by FROM knowledge WHERE project = ? AND key NOT LIKE 'retro-%' ORDER BY updated_at DESC"
+    "SELECT key, content, category, source_node, updated_at, created_by FROM knowledge WHERE project = ? AND key NOT LIKE 'retro-%' ORDER BY updated_at DESC"
   ).all(project) as Array<{
     key: string;
     content: string;
+    category: string;
     source_node: string | null;
     updated_at: string;
     created_by: string;
@@ -121,16 +133,12 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
   if (rows.length === 0) {
     return {
       project,
-      entries: [],
-      summary: { total: 0, stale_30d: 0, missing_source: 0, potential_overlaps: 0 },
+      flagged: [],
+      healthy: [],
+      summary: { total: 0, flagged: 0, stale_30d: 0, missing_source: 0, potential_overlaps: 0 },
       prompt: "No knowledge entries to audit.",
     };
   }
-
-  // Get most recent project activity for staleness baseline
-  const latestActivity = db.prepare(
-    "SELECT MAX(updated_at) as latest FROM nodes WHERE project = ?"
-  ).get(project) as { latest: string | null };
 
   const now = new Date();
 
@@ -154,12 +162,16 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
   const keys = rows.map(r => r.key);
   const similarKeys = findSimilarKeys(keys);
 
-  // Build audit entries
-  const entries: AuditEntry[] = rows.map(r => {
+  // Build and classify entries — flagged get full detail, healthy get minimal shape
+  const STALE_THRESHOLD = 30;
+  const flagged: FlaggedEntry[] = [];
+  const healthy: HealthyEntry[] = [];
+
+  for (const r of rows) {
     const updatedAt = new Date(r.updated_at);
     const daysSinceUpdate = Math.floor((now.getTime() - updatedAt.getTime()) / (1000 * 60 * 60 * 24));
 
-    let sourceStatus: AuditEntry["source_node"];
+    let sourceStatus: FlaggedEntry["source_node"];
     if (!r.source_node) {
       sourceStatus = { status: "missing" };
     } else {
@@ -175,46 +187,68 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
       }
     }
 
-    return {
-      key: r.key,
-      content: r.content,
-      updated_at: r.updated_at,
-      created_by: r.created_by,
-      days_stale: daysSinceUpdate,
-      source_node: sourceStatus,
-      similar_keys: similarKeys.get(r.key) ?? [],
-    };
-  });
+    const similar = similarKeys.get(r.key) ?? [];
+    const isStale = daysSinceUpdate >= STALE_THRESHOLD;
+    const isOrphaned = sourceStatus.status === "missing";
+    const hasOverlap = similar.length > 0;
+
+    if (isStale || isOrphaned || hasOverlap) {
+      const flags: string[] = [];
+      if (isStale) flags.push("stale");
+      if (hasOverlap) flags.push("overlap");
+      if (isOrphaned) flags.push("orphaned");
+      flagged.push({
+        key: r.key,
+        content: r.content,
+        category: r.category,
+        updated_at: r.updated_at,
+        created_by: r.created_by,
+        days_stale: daysSinceUpdate,
+        flags,
+        source_node: sourceStatus,
+        similar_keys: similar,
+      });
+    } else {
+      healthy.push({
+        key: r.key,
+        category: r.category,
+        days_stale: daysSinceUpdate,
+      });
+    }
+  }
 
   // Summary stats
-  const stale30d = entries.filter(e => e.days_stale >= 30).length;
-  const missingSrc = entries.filter(e => e.source_node.status === "missing").length;
   const overlaps = new Set<string>();
   for (const [key, similar] of similarKeys) {
     overlaps.add(key);
     for (const s of similar) overlaps.add(s);
   }
 
-  const prompt = [
-    `Audit ${entries.length} knowledge entries for project "${project}". Review each entry and check for:`,
-    "",
-    "1. **Contradictions** — do any entries contain conflicting information? (e.g. one says 'use REST' and another says 'use GraphQL')",
-    "2. **Stale content** — entries not updated in 30+ days may describe outdated architecture or decisions",
-    "3. **Nomenclature drift** — same concepts referred to by different names across entries (check similar_keys for likely overlaps)",
-    "4. **Orphaned entries** — source_node is 'missing' means the originating task was deleted; is the knowledge still relevant?",
-    "5. **Coverage gaps** — based on the project's current state, is there important knowledge that should exist but doesn't?",
-    "",
-    "For each issue found, use graph_knowledge_write to update/consolidate, or graph_knowledge_delete to remove stale entries.",
-    overlaps.size > 0 ? `\nPotential key overlaps detected: ${[...overlaps].join(", ")}. Check if these should be merged.` : "",
-  ].filter(Boolean).join("\n");
+  const total = rows.length;
+  const prompt = flagged.length === 0
+    ? `All ${total} knowledge entries are healthy. No action needed.`
+    : [
+      `Audit found ${flagged.length} flagged entries out of ${total} total for project "${project}". Review each flagged entry:`,
+      "",
+      "1. **Contradictions** — do any entries contain conflicting information?",
+      "2. **Stale content** — entries not updated in 30+ days may describe outdated architecture or decisions",
+      "3. **Nomenclature drift** — same concepts referred to by different names across entries (check similar_keys for likely overlaps)",
+      "4. **Orphaned entries** — source_node is 'missing' means the originating task was deleted; is the knowledge still relevant?",
+      "5. **Coverage gaps** — is there important knowledge that should exist but doesn't?",
+      "",
+      "For each issue found, use graph_knowledge_write to update/consolidate, or graph_knowledge_delete to remove stale entries.",
+      overlaps.size > 0 ? `\nPotential key overlaps detected: ${[...overlaps].join(", ")}. Check if these should be merged.` : "",
+    ].filter(Boolean).join("\n");
 
   return {
     project,
-    entries,
+    flagged,
+    healthy,
     summary: {
-      total: entries.length,
-      stale_30d: stale30d,
-      missing_source: missingSrc,
+      total,
+      flagged: flagged.length,
+      stale_30d: flagged.filter(e => e.flags.includes("stale")).length,
+      missing_source: flagged.filter(e => e.flags.includes("orphaned")).length,
       potential_overlaps: overlaps.size,
     },
     prompt,

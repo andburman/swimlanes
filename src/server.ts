@@ -456,13 +456,18 @@ const TOOLS = [
   {
     name: "graph_knowledge_write",
     description:
-      "Write a knowledge entry for a project. Creates or overwrites a named document. Use for persistent project-level knowledge (architecture decisions, conventions, API contracts) that outlives individual tasks.",
+      "Write a knowledge entry for a project. Creates or overwrites a named document. Use for persistent project-level knowledge (architecture decisions, conventions, API contracts) that outlives individual tasks. Check existing entries first to avoid duplicates.",
     inputSchema: {
       type: "object" as const,
       properties: {
         project: { type: "string", description: "Project name" },
-        key: { type: "string", description: "Knowledge entry key (e.g. 'auth', 'database-schema', 'api-contracts')" },
+        key: { type: "string", description: "Knowledge entry key. Use lowercase hyphenated names (e.g. 'auth-strategy', 'db-schema', 'api-contracts')" },
         content: { type: "string", description: "Free-form text content" },
+        category: {
+          type: "string",
+          enum: ["general", "architecture", "convention", "decision", "environment", "api-contract", "discovery"],
+          description: "Entry category. Defaults to 'general'. Use to organize entries and improve overlap detection.",
+        },
         source_node: { type: "string", description: "Node ID this knowledge was written during. Auto-detected from agent's claimed node if omitted." },
       },
       required: ["project", "key", "content"],
@@ -510,7 +515,7 @@ const TOOLS = [
   {
     name: "graph_knowledge_audit",
     description:
-      "Deep-clean audit of all knowledge entries. Returns every entry with staleness (days since update), source node status (active/resolved/missing), key overlap detection, and a structured analysis prompt. Use for periodic knowledge hygiene — consolidating duplicates, removing stale entries, fixing contradictions. For lightweight drift detection during regular work, use graph_retro instead.",
+      "Deep-clean audit of knowledge entries. Token-optimized: returns full content only for flagged entries (stale 30d+, overlapping keys, orphaned source node). Healthy entries return key + category + days_stale only. Use for periodic knowledge hygiene — consolidating duplicates, removing stale entries, fixing contradictions. For lightweight drift detection during regular work, use graph_retro instead.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -705,7 +710,7 @@ export async function startServer(): Promise<void> {
 
         case "graph_knowledge_delete":
           checkKnowledgeTier(tier);
-          result = handleKnowledgeDelete(args as any);
+          result = handleKnowledgeDelete(args as any, AGENT_IDENTITY);
           break;
 
         case "graph_knowledge_search":

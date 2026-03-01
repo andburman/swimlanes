@@ -18,7 +18,7 @@ import { handleRetro } from "../src/tools/retro.js";
 import { handleKnowledgeAudit } from "../src/tools/knowledge-audit.js";
 import { handleResolve } from "../src/tools/resolve.js";
 import { handleRoadmap } from "../src/tools/roadmap.js";
-import { updateNode } from "../src/nodes.js";
+import { updateNode, sweepAutoResolve } from "../src/nodes.js";
 import { ValidationError, EngineError } from "../src/validate.js";
 import { computeContinuityConfidence } from "../src/continuity.js";
 import { computeIntegrity } from "../src/integrity.js";
@@ -1363,6 +1363,110 @@ describe("auto-resolve cascade control", () => {
     expect(result.retro_nudge).toBeDefined();
     expect(result.retro_nudge).toContain("v1.0 Release");
     expect(result.retro_nudge).toContain("graph_retro");
+  });
+});
+
+// [sl:o2foY3BkTmpfUwhEgMZlw] Auto-resolve sweep tests
+describe("sweepAutoResolve", () => {
+  it("resolves parents with all children already resolved", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Phase 1" },
+        { ref: "c1", parent_ref: "parent", summary: "Task 1" },
+        { ref: "c2", parent_ref: "parent", summary: "Task 2" },
+      ]
+    }, AGENT);
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+    const c1Id = plan.created.find(c => c.ref === "c1")!.id;
+    const c2Id = plan.created.find(c => c.ref === "c2")!.id;
+
+    // Resolve children directly via updateNode (simulating pre-upgrade state)
+    updateNode({ node_id: c1Id, agent: AGENT, resolved: true, add_evidence: [{ type: "note", ref: "done" }] });
+    updateNode({ node_id: c2Id, agent: AGENT, resolved: true, add_evidence: [{ type: "note", ref: "done" }] });
+
+    // Parent is still unresolved (no auto-resolve triggered because we used updateNode directly)
+    const before = handleContext({ node_id: parentId });
+    expect(before.node.resolved).toBe(false);
+
+    // Sweep should catch it
+    const swept = sweepAutoResolve("test", AGENT);
+    expect(swept.length).toBe(1);
+    expect(swept[0].id).toBe(parentId);
+    expect(swept[0].children_count).toBe(2);
+
+    const after = handleContext({ node_id: parentId });
+    expect(after.node.resolved).toBe(true);
+    expect(after.node.evidence.some((e: any) => e.type === "auto_resolve" && e.ref.includes("sweep"))).toBe(true);
+  });
+
+  it("cascades through multiple levels", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "gp", parent_ref: root.id, summary: "Grandparent" },
+        { ref: "parent", parent_ref: "gp", summary: "Parent" },
+        { ref: "child", parent_ref: "parent", summary: "Child" },
+      ]
+    }, AGENT);
+    const gpId = plan.created.find(c => c.ref === "gp")!.id;
+    const childId = plan.created.find(c => c.ref === "child")!.id;
+
+    updateNode({ node_id: childId, agent: AGENT, resolved: true, add_evidence: [{ type: "note", ref: "done" }] });
+
+    const swept = sweepAutoResolve("test", AGENT);
+    // First pass resolves Parent, second pass resolves Grandparent
+    expect(swept.length).toBe(2);
+
+    const gpAfter = handleContext({ node_id: gpId });
+    expect(gpAfter.node.resolved).toBe(true);
+  });
+
+  it("respects auto_resolve: false opt-out", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Manual parent", properties: { auto_resolve: false } },
+        { ref: "child", parent_ref: "parent", summary: "Child" },
+      ]
+    }, AGENT);
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+    const childId = plan.created.find(c => c.ref === "child")!.id;
+
+    updateNode({ node_id: childId, agent: AGENT, resolved: true, add_evidence: [{ type: "note", ref: "done" }] });
+
+    const swept = sweepAutoResolve("test", AGENT);
+    expect(swept.length).toBe(0);
+
+    const after = handleContext({ node_id: parentId });
+    expect(after.node.resolved).toBe(false);
+  });
+
+  it("returns empty when nothing to sweep", () => {
+    openProject("test", "test", AGENT);
+    const swept = sweepAutoResolve("test", AGENT);
+    expect(swept.length).toBe(0);
+  });
+
+  it("runs during graph_onboard and reflects in summary", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "phase", parent_ref: root.id, summary: "Phase 1" },
+        { ref: "task", parent_ref: "phase", summary: "Only task" },
+      ]
+    }, AGENT);
+    const taskId = plan.created.find(c => c.ref === "task")!.id;
+
+    updateNode({ node_id: taskId, agent: AGENT, resolved: true, add_evidence: [{ type: "note", ref: "done" }] });
+
+    const result = handleOnboard({ project: "test" }) as any;
+    // Sweep should have resolved Phase 1
+    expect(result.auto_resolved_sweep).toBeDefined();
+    expect(result.auto_resolved_sweep.length).toBe(1);
+    expect(result.auto_resolved_sweep[0].summary).toBe("Phase 1");
+    // Summary should reflect the swept state
+    expect(result.summary.resolved).toBeGreaterThanOrEqual(2); // task + phase
   });
 });
 

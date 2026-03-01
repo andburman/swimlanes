@@ -1,5 +1,5 @@
 import { getDb } from "../db.js";
-import { getProjectRoot, getProjectSummary, listProjects } from "../nodes.js";
+import { getProjectRoot, getProjectSummary, listProjects, sweepAutoResolve } from "../nodes.js";
 import { optionalString, optionalNumber } from "../validate.js";
 import { EngineError } from "../validate.js";
 import { computeContinuityConfidence, type ContinuityConfidence } from "../continuity.js";
@@ -95,6 +95,8 @@ export interface OnboardResult {
     claimed_by: string;
     age_hours: number;
   }>;
+  // [sl:o2foY3BkTmpfUwhEgMZlw] Auto-resolve sweep results
+  auto_resolved_sweep?: Array<{ id: string; summary: string; children_count: number }>;
 }
 
 function computeChecklist(
@@ -253,7 +255,10 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
     throw new EngineError("project_not_found", `Project not found: ${project}.${suffix}`);
   }
 
-  // 1. Project summary counts
+  // [sl:o2foY3BkTmpfUwhEgMZlw] Auto-resolve sweep — catch up parents that should already be resolved
+  const sweepResults = sweepAutoResolve(project, "auto-resolve-sweep");
+
+  // 1. Project summary counts (after sweep so numbers reflect cleaned-up state)
   const summary = getProjectSummary(project);
 
   // 2. Tree structure — root's direct children only (depth 1), with child counts
@@ -499,7 +504,7 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
       .filter((c) => c.status !== "pass")
       .map(({ check, status, message }) => ({ check, status, message }));
 
-    return {
+    const briefResult: OnboardResult = {
       detail: "brief",
       project,
       goal: root.summary,
@@ -513,6 +518,10 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
       // [sl:l46pcXQG3za7TMBM8tZAf] Compact knowledge summary
       knowledge: knowledgeCompact,
     };
+    if (sweepResults.length > 0) {
+      briefResult.auto_resolved_sweep = sweepResults;
+    }
+    return briefResult;
   }
 
   // Full mode: everything
@@ -525,7 +534,7 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
 
   const checklist = fullChecklist.map(({ check, status, message }) => ({ check, status, message }));
 
-  return {
+  const fullResult: OnboardResult = {
     detail: "full",
     project,
     goal: root.summary,
@@ -546,4 +555,8 @@ export function handleOnboard(input: OnboardInput): OnboardResult | { projects: 
     blocked_nodes,
     claimed_nodes,
   };
+  if (sweepResults.length > 0) {
+    fullResult.auto_resolved_sweep = sweepResults;
+  }
+  return fullResult;
 }

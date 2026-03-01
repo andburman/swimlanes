@@ -466,3 +466,57 @@ export function getProjectSummary(project: string): {
     actionable: actionable.count,
   };
 }
+
+// [sl:o2foY3BkTmpfUwhEgMZlw] Auto-resolve sweep — retroactively resolve parents with all children resolved
+export function sweepAutoResolve(project: string, agent: string): Array<{ id: string; summary: string; children_count: number }> {
+  const db = getDb();
+  const resolved: Array<{ id: string; summary: string; children_count: number }> = [];
+  const seen = new Set<string>();
+
+  // Iterative: each pass may unlock new parents, so loop until stable
+  let changed = true;
+  while (changed) {
+    changed = false;
+
+    // Find unresolved parents where all children are resolved, not opted out
+    const candidates = db.prepare(
+      `SELECT n.id, n.summary, n.properties,
+         (SELECT COUNT(*) FROM nodes c WHERE c.parent = n.id) as child_count,
+         (SELECT COUNT(*) FROM nodes c WHERE c.parent = n.id AND c.resolved = 1) as resolved_children
+       FROM nodes n
+       WHERE n.project = ? AND n.parent IS NOT NULL AND n.resolved = 0
+       AND (SELECT COUNT(*) FROM nodes c WHERE c.parent = n.id) > 0
+       AND (SELECT COUNT(*) FROM nodes c WHERE c.parent = n.id) =
+           (SELECT COUNT(*) FROM nodes c WHERE c.parent = n.id AND c.resolved = 1)`
+    ).all(project) as Array<{
+      id: string;
+      summary: string;
+      properties: string;
+      child_count: number;
+      resolved_children: number;
+    }>;
+
+    for (const row of candidates) {
+      if (seen.has(row.id)) continue;
+      const props = JSON.parse(row.properties);
+      if (props.auto_resolve === false) continue;
+
+      seen.add(row.id);
+
+      updateNode({
+        node_id: row.id,
+        agent,
+        resolved: true,
+        add_evidence: [{
+          type: "auto_resolve",
+          ref: `${row.child_count}/${row.child_count} children resolved (sweep)`,
+        }],
+      });
+
+      resolved.push({ id: row.id, summary: row.summary, children_count: row.child_count });
+      changed = true;
+    }
+  }
+
+  return resolved;
+}

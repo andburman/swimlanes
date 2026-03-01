@@ -17,6 +17,7 @@ import { handleKnowledgeWrite, handleKnowledgeWriteBatch, handleKnowledgeRead, h
 import { handleRetro } from "../src/tools/retro.js";
 import { handleKnowledgeAudit } from "../src/tools/knowledge-audit.js";
 import { handleResolve } from "../src/tools/resolve.js";
+import { handleRoadmap } from "../src/tools/roadmap.js";
 import { updateNode } from "../src/nodes.js";
 import { ValidationError, EngineError } from "../src/validate.js";
 import { computeContinuityConfidence } from "../src/continuity.js";
@@ -884,6 +885,484 @@ describe("graph_history", () => {
     const actions = result.events.map((e) => e.action);
     expect(actions).toContain("created");
     expect(actions).toContain("updated");
+  });
+});
+
+// [sl:M8jj8RzospuObjRJiDMRS] decision_context tests
+describe("decision_context", () => {
+  it("flows through graph_update to history", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handleUpdate(
+      { updates: [{ node_id: root.id, summary: "Pivoted" }], decision_context: "Prompt-to-agent pivot" },
+      AGENT
+    );
+    const result = handleHistory({ node_id: root.id });
+    const updateEvent = result.events.find(e => e.decision_context === "Prompt-to-agent pivot");
+    expect(updateEvent).toBeDefined();
+    expect(updateEvent!.action).toBe("updated");
+    expect(updateEvent!.decision_context).toBe("Prompt-to-agent pivot");
+  });
+
+  it("flows through graph_plan to history", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan(
+      { nodes: [{ ref: "a", parent_ref: root.id, summary: "New feature" }], decision_context: "Sprint planning" },
+      AGENT
+    );
+    const nodeId = plan.created[0].id;
+    const result = handleHistory({ node_id: nodeId });
+    expect(result.events[0].decision_context).toBe("Sprint planning");
+  });
+
+  it("flows through graph_restructure to history", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "p1", parent_ref: root.id, summary: "Phase 1" },
+        { ref: "p2", parent_ref: root.id, summary: "Phase 2" },
+        { ref: "task", parent_ref: "p1", summary: "A task" },
+      ]
+    }, AGENT);
+    const taskId = plan.created.find(c => c.ref === "task")!.id;
+    const p2Id = plan.created.find(c => c.ref === "p2")!.id;
+    handleRestructure(
+      { operations: [{ op: "move", node_id: taskId, new_parent: p2Id }], decision_context: "Deferred to v1.1" },
+      AGENT
+    );
+    const result = handleHistory({ node_id: taskId });
+    const moveEvent = result.events.find(e => e.action === "moved");
+    expect(moveEvent?.decision_context).toBe("Deferred to v1.1");
+  });
+
+  it("flows through graph_connect to history", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "a", parent_ref: root.id, summary: "Task A" },
+        { ref: "b", parent_ref: root.id, summary: "Task B" },
+      ]
+    }, AGENT);
+    const aId = plan.created.find(c => c.ref === "a")!.id;
+    const bId = plan.created.find(c => c.ref === "b")!.id;
+    handleConnect(
+      { edges: [{ from: aId, to: bId, type: "depends_on" }], decision_context: "B must finish before A" },
+      AGENT
+    );
+    const result = handleHistory({ node_id: aId });
+    const edgeEvent = result.events.find(e => e.action === "edge_added");
+    expect(edgeEvent?.decision_context).toBe("B must finish before A");
+  });
+
+  it("omits decision_context from history when not provided", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handleUpdate(
+      { updates: [{ node_id: root.id, summary: "Normal update" }] },
+      AGENT
+    );
+    const result = handleHistory({ node_id: root.id });
+    const updateEvent = result.events.find(e => e.action === "updated");
+    expect(updateEvent?.decision_context).toBeUndefined();
+  });
+});
+
+// [sl:Wa6zadcxIgzv187Csoqy8] ancestor_filter tests
+describe("ancestor_filter on graph_next", () => {
+  it("returns only nodes under ancestors matching filter", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "now", parent_ref: root.id, summary: "Now horizon", properties: { horizon: "now" } },
+        { ref: "later", parent_ref: root.id, summary: "Later horizon", properties: { horizon: "later" } },
+        { ref: "task_now", parent_ref: "now", summary: "Urgent task" },
+        { ref: "task_later", parent_ref: "later", summary: "Deferred task" },
+      ]
+    }, AGENT);
+
+    const result = handleNext({ project: "test", ancestor_filter: { horizon: "now" } }, AGENT);
+    expect(result.nodes.length).toBe(1);
+    expect(result.nodes[0].node.summary).toBe("Urgent task");
+  });
+
+  it("returns empty when no ancestors match filter", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({
+      nodes: [
+        { ref: "later", parent_ref: root.id, summary: "Later", properties: { horizon: "later" } },
+        { ref: "task", parent_ref: "later", summary: "A task" },
+      ]
+    }, AGENT);
+
+    const result = handleNext({ project: "test", ancestor_filter: { horizon: "now" } }, AGENT);
+    expect(result.nodes.length).toBe(0);
+  });
+
+  it("works with multiple filter properties", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({
+      nodes: [
+        { ref: "r1", parent_ref: root.id, summary: "Release 1", properties: { horizon: "now", version: "1.0" } },
+        { ref: "r2", parent_ref: root.id, summary: "Release 2", properties: { horizon: "now", version: "2.0" } },
+        { ref: "t1", parent_ref: "r1", summary: "Task in v1" },
+        { ref: "t2", parent_ref: "r2", summary: "Task in v2" },
+      ]
+    }, AGENT);
+
+    const result = handleNext({ project: "test", ancestor_filter: { horizon: "now", version: "1.0" }, count: 10 }, AGENT);
+    expect(result.nodes.length).toBe(1);
+    expect(result.nodes[0].node.summary).toBe("Task in v1");
+  });
+
+  it("includes deeply nested descendants of matching ancestors", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({
+      nodes: [
+        { ref: "now", parent_ref: root.id, summary: "Now", properties: { horizon: "now" } },
+        { ref: "feature", parent_ref: "now", summary: "Feature" },
+        { ref: "subtask", parent_ref: "feature", summary: "Deep subtask" },
+      ]
+    }, AGENT);
+
+    const result = handleNext({ project: "test", ancestor_filter: { horizon: "now" } }, AGENT);
+    expect(result.nodes.length).toBe(1);
+    expect(result.nodes[0].node.summary).toBe("Deep subtask");
+  });
+
+  it("combines with scope parameter", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "now1", parent_ref: root.id, summary: "Now area 1", properties: { horizon: "now" } },
+        { ref: "now2", parent_ref: root.id, summary: "Now area 2", properties: { horizon: "now" } },
+        { ref: "t1", parent_ref: "now1", summary: "Task 1" },
+        { ref: "t2", parent_ref: "now2", summary: "Task 2" },
+      ]
+    }, AGENT);
+    const now1Id = plan.created.find(c => c.ref === "now1")!.id;
+
+    // Scope to now1, ancestor_filter for horizon:now — only task 1
+    const result = handleNext({ project: "test", scope: now1Id, ancestor_filter: { horizon: "now" }, count: 10 }, AGENT);
+    expect(result.nodes.length).toBe(1);
+    expect(result.nodes[0].node.summary).toBe("Task 1");
+  });
+});
+
+// [sl:XOOwcw6PkOaJc-yQOkt2A] graph_roadmap tests
+describe("graph_roadmap", () => {
+  it("returns roadmap with horizon grouping", () => {
+    const { root } = openProject("test", "Build product", AGENT) as any;
+    handlePlan({
+      nodes: [
+        { ref: "v1", parent_ref: root.id, summary: "v1.0 Release", properties: { horizon: "now", version: "1.0" } },
+        { ref: "v2", parent_ref: root.id, summary: "v2.0 Release", properties: { horizon: "next", version: "2.0" } },
+        { ref: "t1", parent_ref: "v1", summary: "Auth" },
+        { ref: "t2", parent_ref: "v1", summary: "Dashboard" },
+        { ref: "t3", parent_ref: "v2", summary: "Analytics" },
+      ]
+    }, AGENT);
+
+    const result = handleRoadmap({ project: "test" });
+    expect(result.conventions.horizon).toBe(true);
+    expect(result.conventions.version).toBe(true);
+    expect(result.horizons).toBeDefined();
+    expect(result.horizons!["now"]).toHaveLength(1);
+    expect(result.horizons!["next"]).toHaveLength(1);
+    expect(result.horizons!["now"][0].total).toBe(2);
+    expect(result.horizons!["now"][0].done).toBe(0);
+    expect(result.summary.total_releases).toBe(2);
+  });
+
+  it("falls back to flat list without conventions", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({
+      nodes: [
+        { ref: "phase1", parent_ref: root.id, summary: "Phase 1" },
+        { ref: "task", parent_ref: "phase1", summary: "A task" },
+      ]
+    }, AGENT);
+
+    const result = handleRoadmap({ project: "test" });
+    expect(result.conventions.horizon).toBe(false);
+    expect(result.conventions.fallback).toBe("tree_structure");
+    expect(result.releases).toBeDefined();
+    expect(result.horizons).toBeUndefined();
+    expect(result.releases!.length).toBe(1);
+  });
+
+  it("tracks progress correctly", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "release", parent_ref: root.id, summary: "Release", properties: { horizon: "now" } },
+        { ref: "t1", parent_ref: "release", summary: "Task 1" },
+        { ref: "t2", parent_ref: "release", summary: "Task 2" },
+        { ref: "t3", parent_ref: "release", summary: "Task 3" },
+      ]
+    }, AGENT);
+    const t1Id = plan.created.find(c => c.ref === "t1")!.id;
+    handleUpdate({ updates: [{ node_id: t1Id, resolved: true, resolved_reason: "Done" }] }, AGENT);
+
+    const result = handleRoadmap({ project: "test" });
+    const release = result.horizons!["now"][0];
+    expect(release.done).toBe(1);
+    expect(release.total).toBe(3);
+  });
+
+  it("detects at_risk from PM flag", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({
+      nodes: [
+        { ref: "release", parent_ref: root.id, summary: "Risky release", properties: { horizon: "now", at_risk: true } },
+        { ref: "task", parent_ref: "release", summary: "Task" },
+      ]
+    }, AGENT);
+
+    const result = handleRoadmap({ project: "test" });
+    expect(result.horizons!["now"][0].at_risk).toBe(true);
+    expect(result.horizons!["now"][0].at_risk_reasons).toContain("flagged by PM");
+    expect(result.summary.at_risk).toBe(1);
+  });
+
+  it("infers at_risk from blocked descendants", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "release", parent_ref: root.id, summary: "Release", properties: { horizon: "now" } },
+        { ref: "task", parent_ref: "release", summary: "Blocked task" },
+      ]
+    }, AGENT);
+    const taskId = plan.created.find(c => c.ref === "task")!.id;
+    handleUpdate({ updates: [{ node_id: taskId, blocked: true, blocked_reason: "Waiting on vendor" }] }, AGENT);
+
+    const result = handleRoadmap({ project: "test" });
+    expect(result.horizons!["now"][0].at_risk).toBe(true);
+    expect(result.horizons!["now"][0].at_risk_reasons.some(r => r.includes("blocked"))).toBe(true);
+  });
+
+  it("includes last_decision in full mode", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "release", parent_ref: root.id, summary: "Release", properties: { horizon: "now" } },
+        { ref: "task", parent_ref: "release", summary: "Task" },
+      ]
+    }, AGENT);
+    const taskId = plan.created.find(c => c.ref === "task")!.id;
+    handleUpdate({
+      updates: [{ node_id: taskId, summary: "Updated task" }],
+      decision_context: "Pivoted to new approach"
+    }, AGENT);
+
+    const result = handleRoadmap({ project: "test", detail: "full" });
+    expect(result.horizons!["now"][0].last_decision).toBe("Pivoted to new approach");
+    expect(result.horizons!["now"][0].last_decision_at).toBeDefined();
+  });
+
+  it("auto-selects single project", () => {
+    openProject("solo", "test", AGENT);
+    const result = handleRoadmap({});
+    expect(result.project).toBe("solo");
+  });
+
+  it("orders horizons correctly", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({
+      nodes: [
+        { ref: "later", parent_ref: root.id, summary: "Later", properties: { horizon: "later" } },
+        { ref: "now", parent_ref: root.id, summary: "Now", properties: { horizon: "now" } },
+        { ref: "paused", parent_ref: root.id, summary: "Paused", properties: { horizon: "paused" } },
+        { ref: "next", parent_ref: root.id, summary: "Next", properties: { horizon: "next" } },
+        { ref: "t1", parent_ref: "later", summary: "T" },
+        { ref: "t2", parent_ref: "now", summary: "T" },
+        { ref: "t3", parent_ref: "paused", summary: "T" },
+        { ref: "t4", parent_ref: "next", summary: "T" },
+      ]
+    }, AGENT);
+
+    const result = handleRoadmap({ project: "test" });
+    const keys = Object.keys(result.horizons!);
+    expect(keys).toEqual(["now", "next", "later", "paused"]);
+  });
+});
+
+// [sl:0hYsWpHub_T8Z3ser3WvT] Auto-resolve and resolve guard tests
+describe("auto-resolve cascade control", () => {
+  it("auto-resolves parent when all children resolved", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Parent" },
+        { ref: "child", parent_ref: "parent", summary: "Child" },
+      ]
+    }, AGENT);
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+    const childId = plan.created.find(c => c.ref === "child")!.id;
+
+    const result = handleUpdate({
+      updates: [{ node_id: childId, resolved: true, resolved_reason: "Done" }]
+    }, AGENT);
+
+    // Parent should auto-resolve
+    expect(result.auto_resolved).toBeDefined();
+    expect(result.auto_resolved!.length).toBe(1);
+    expect(result.auto_resolved![0].node_id).toBe(parentId);
+    expect(result.auto_resolved![0].children_summary).toBeDefined();
+    expect(result.auto_resolved![0].children_summary!.length).toBe(1);
+  });
+
+  it("stops cascade after 1 level by default", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "grandparent", parent_ref: root.id, summary: "Grandparent" },
+        { ref: "parent", parent_ref: "grandparent", summary: "Parent" },
+        { ref: "child", parent_ref: "parent", summary: "Child" },
+      ]
+    }, AGENT);
+    const grandparentId = plan.created.find(c => c.ref === "grandparent")!.id;
+    const childId = plan.created.find(c => c.ref === "child")!.id;
+
+    handleUpdate({
+      updates: [{ node_id: childId, resolved: true, resolved_reason: "Done" }]
+    }, AGENT);
+
+    // Parent auto-resolves (1 level), but grandparent should NOT (2nd level blocked by default)
+    const ctx = handleContext({ node_id: grandparentId });
+    expect(ctx.node.resolved).toBe(false);
+  });
+
+  it("cascades unlimited when cascade_resolve is true", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "grandparent", parent_ref: root.id, summary: "Grandparent" },
+        { ref: "parent", parent_ref: "grandparent", summary: "Parent" },
+        { ref: "child", parent_ref: "parent", summary: "Child" },
+      ]
+    }, AGENT);
+    const grandparentId = plan.created.find(c => c.ref === "grandparent")!.id;
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+    const childId = plan.created.find(c => c.ref === "child")!.id;
+
+    // Set cascade_resolve on parent so it cascades upward
+    handleUpdate({
+      updates: [{ node_id: parentId, properties: { cascade_resolve: true } }]
+    }, AGENT);
+
+    handleUpdate({
+      updates: [{ node_id: childId, resolved: true, resolved_reason: "Done" }]
+    }, AGENT);
+
+    // Both parent and grandparent should auto-resolve
+    const ctx = handleContext({ node_id: grandparentId });
+    expect(ctx.node.resolved).toBe(true);
+  });
+
+  it("respects auto_resolve: false opt-out", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Parent" },
+        { ref: "child", parent_ref: "parent", summary: "Child" },
+      ]
+    }, AGENT);
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+    const childId = plan.created.find(c => c.ref === "child")!.id;
+
+    // Opt out of auto-resolve
+    handleUpdate({
+      updates: [{ node_id: parentId, properties: { auto_resolve: false } }]
+    }, AGENT);
+
+    const result = handleUpdate({
+      updates: [{ node_id: childId, resolved: true, resolved_reason: "Done" }]
+    }, AGENT);
+
+    // Parent should NOT auto-resolve
+    const ctx = handleContext({ node_id: parentId });
+    expect(ctx.node.resolved).toBe(false);
+    expect(result.auto_resolved).toBeUndefined();
+  });
+
+  it("uses auto_resolve evidence type", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Parent" },
+        { ref: "c1", parent_ref: "parent", summary: "Child 1" },
+        { ref: "c2", parent_ref: "parent", summary: "Child 2" },
+      ]
+    }, AGENT);
+    const c1Id = plan.created.find(c => c.ref === "c1")!.id;
+    const c2Id = plan.created.find(c => c.ref === "c2")!.id;
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+
+    handleUpdate({ updates: [{ node_id: c1Id, resolved: true, resolved_reason: "Done" }] }, AGENT);
+    handleUpdate({ updates: [{ node_id: c2Id, resolved: true, resolved_reason: "Done" }] }, AGENT);
+
+    const ctx = handleContext({ node_id: parentId });
+    expect(ctx.node.resolved).toBe(true);
+    const autoEv = ctx.node.evidence.find((e: any) => e.type === "auto_resolve");
+    expect(autoEv).toBeDefined();
+    expect(autoEv.ref).toBe("2/2 children resolved");
+  });
+
+  it("blocks manual resolve when parent has unresolved children", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Parent" },
+        { ref: "c1", parent_ref: "parent", summary: "Child 1" },
+        { ref: "c2", parent_ref: "parent", summary: "Child 2" },
+      ]
+    }, AGENT);
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+
+    // Try to resolve parent while children are unresolved
+    expect(() => {
+      handleUpdate({
+        updates: [{ node_id: parentId, resolved: true, resolved_reason: "Forcing it" }]
+      }, AGENT);
+    }).toThrow(/unresolved child/);
+  });
+
+  it("allows resolve when all children are already resolved", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "parent", parent_ref: root.id, summary: "Parent", properties: { auto_resolve: false } },
+        { ref: "child", parent_ref: "parent", summary: "Child" },
+      ]
+    }, AGENT);
+    const parentId = plan.created.find(c => c.ref === "parent")!.id;
+    const childId = plan.created.find(c => c.ref === "child")!.id;
+
+    // Resolve child first
+    handleUpdate({ updates: [{ node_id: childId, resolved: true, resolved_reason: "Done" }] }, AGENT);
+
+    // Now parent can be manually resolved (auto_resolve disabled but manual should work)
+    const result = handleUpdate({
+      updates: [{ node_id: parentId, resolved: true, resolved_reason: "All done" }]
+    }, AGENT);
+    expect(result.updated.find(u => u.node_id === parentId)).toBeDefined();
+  });
+
+  it("emits retro_nudge on milestone completion", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "milestone", parent_ref: root.id, summary: "v1.0 Release" },
+        { ref: "task", parent_ref: "milestone", summary: "Final task" },
+      ]
+    }, AGENT);
+    const taskId = plan.created.find(c => c.ref === "task")!.id;
+
+    const result = handleUpdate({
+      updates: [{ node_id: taskId, resolved: true, resolved_reason: "Done" }]
+    }, AGENT);
+
+    expect(result.retro_nudge).toBeDefined();
+    expect(result.retro_nudge).toContain("v1.0 Release");
+    expect(result.retro_nudge).toContain("graph_retro");
   });
 });
 

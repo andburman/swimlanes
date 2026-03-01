@@ -42,7 +42,7 @@ export function computeIntegrity(project: string): IntegrityResult {
     const contextLinks: string[] = JSON.parse(row.context_links);
 
     // Skip auto-resolved nodes (they inherit quality from children)
-    if (evidence.length === 1 && evidence[0].ref === "Auto-resolved: all children completed") {
+    if (evidence.some((e: { type: string }) => e.type === "auto_resolve")) {
       continue;
     }
 
@@ -157,7 +157,7 @@ export function computeIntegrity(project: string): IntegrityResult {
   for (const row of resolvedRows) {
     const evidence: Evidence[] = JSON.parse(row.evidence);
     const contextLinks: string[] = JSON.parse(row.context_links);
-    if (evidence.length === 1 && evidence[0].ref === "Auto-resolved: all children completed") continue;
+    if (evidence.some(e => e.type === "auto_resolve")) continue;
     const hasGit = evidence.some(e => e.type === "git");
     const hasNote = evidence.some(e => e.type === "note");
     const hasLinks = contextLinks.length > 0;

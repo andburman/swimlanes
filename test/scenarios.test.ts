@@ -115,17 +115,15 @@ describe("deep decomposition", () => {
     expect(actionable.nodes).toHaveLength(1);
     expect(actionable.nodes[0].summary).toBe("Child");
 
-    // Resolve child — parent and root auto-resolve (single-child chains cascade)
+    // Resolve child — parent auto-resolves (1 level cascade by default)
     const result = handleUpdate({
       updates: [{ node_id: ids.child, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
     }, "agent");
     expect(result.auto_resolved!.some((n) => n.summary === "Parent")).toBe(true);
-    expect(result.auto_resolved!.some((n) => n.summary === "deep")).toBe(true);
 
-    // Everything is resolved
+    // Root does NOT auto-resolve (cascade limited to 1 level)
     const summary = handleOpen({ project: "deep" }, "agent") as any;
-    expect(summary.summary.resolved).toBe(3); // child + parent + root
-    expect(summary.summary.actionable).toBe(0);
+    expect(summary.summary.resolved).toBe(2); // child + parent
   });
 });
 
@@ -461,20 +459,17 @@ describe("cascade resolution", () => {
     let next = handleNext({ project: "cascade" }, "agent");
     expect(next.nodes[0].node.summary).toBe("Child");
 
-    // Resolve child → entire chain auto-resolves (parent → grandparent → root)
+    // Resolve child → parent auto-resolves (1 level). Grandparent and root stay unresolved.
     const result = handleUpdate({
       updates: [{ node_id: ids.child, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
     }, "agent");
 
     const autoResolved = result.auto_resolved!.map((n) => n.summary);
     expect(autoResolved).toContain("Parent");
-    expect(autoResolved).toContain("Grandparent");
-    expect(autoResolved).toContain("Cascade"); // root
+    expect(autoResolved).not.toContain("Grandparent"); // 1-level cascade limit
 
-    // Everything is resolved
     const summary = handleOpen({ project: "cascade" }, "agent") as any;
-    expect(summary.summary.resolved).toBe(4); // child + parent + grandparent + root
-    expect(summary.summary.actionable).toBe(0);
+    expect(summary.summary.resolved).toBe(2); // child + parent
   });
 
   it("auto-resolved nodes get synthetic evidence", () => {
@@ -498,8 +493,8 @@ describe("cascade resolution", () => {
     const ctx = handleContext({ node_id: ids.parent });
     expect(ctx.node.resolved).toBe(true);
     expect(ctx.node.evidence).toHaveLength(1);
-    expect(ctx.node.evidence[0].ref).toBe("Auto-resolved: all children completed");
-    expect(ctx.node.evidence[0].type).toBe("note");
+    expect(ctx.node.evidence[0].ref).toBe("1/1 children resolved");
+    expect(ctx.node.evidence[0].type).toBe("auto_resolve");
   });
 
   it("does not auto-resolve parent with mix of resolved and unresolved children", () => {
@@ -557,15 +552,13 @@ describe("cascade resolution", () => {
     expect(actionable.nodes).toHaveLength(1);
     expect(actionable.nodes[0].summary).toBe("Child 3"); // parent still not actionable
 
-    // Resolve last child — parent auto-resolves (and root cascades too)
+    // Resolve last child — parent auto-resolves (root does NOT — 1 level cascade)
     const result = handleUpdate({
       updates: [{ node_id: ids.c3, resolved: true, add_evidence: [{ type: "note", ref: "done" }] }],
     }, "agent");
     expect(result.auto_resolved!.some((n) => n.summary === "Parent")).toBe(true);
 
-    // Everything is resolved
     const summary = handleOpen({ project: "multi-child" }, "agent") as any;
-    expect(summary.summary.resolved).toBe(5); // c1 + c2 + c3 + parent + root
-    expect(summary.summary.actionable).toBe(0);
+    expect(summary.summary.resolved).toBe(4); // c1 + c2 + c3 + parent (root stays unresolved)
   });
 });

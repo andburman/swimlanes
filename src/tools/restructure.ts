@@ -32,6 +32,7 @@ export type RestructureOp = MoveOp | MergeOp | DropOp | DeleteOp;
 
 export interface RestructureInput {
   operations: RestructureOp[];
+  decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
 }
 
 export interface RestructureResult {
@@ -81,7 +82,7 @@ function recomputeSubtreeDepth(nodeId: string, newDepth: number): void {
   }
 }
 
-function handleMove(op: MoveOp, agent: string): { node_id: string; result: string } {
+function handleMove(op: MoveOp, agent: string, decisionContext?: string): { node_id: string; result: string } {
   const db = getDb();
   const node = getNodeOrThrow(op.node_id);
   const newParent = getNodeOrThrow(op.new_parent);
@@ -110,12 +111,12 @@ function handleMove(op: MoveOp, agent: string): { node_id: string; result: strin
 
   logEvent(op.node_id, agent, "moved", [
     { field: "parent", before: oldParent, after: op.new_parent },
-  ]);
+  ], decisionContext);
 
   return { node_id: op.node_id, result: `moved under ${op.new_parent}` };
 }
 
-function handleMerge(op: MergeOp, agent: string): { node_id: string; result: string } {
+function handleMerge(op: MergeOp, agent: string, decisionContext?: string): { node_id: string; result: string } {
   const db = getDb();
   const source = getNodeOrThrow(op.source);
   const target = getNodeOrThrow(op.target);
@@ -184,7 +185,7 @@ function handleMerge(op: MergeOp, agent: string): { node_id: string; result: str
   // Log merge on target (source will be deleted)
   logEvent(op.target, agent, "merged", [
     { field: "merged_from", before: null, after: op.source },
-  ]);
+  ], decisionContext);
 
   // Delete source: events, edges, then node (FK order)
   db.prepare("DELETE FROM events WHERE node_id = ?").run(op.source);
@@ -197,7 +198,7 @@ function handleMerge(op: MergeOp, agent: string): { node_id: string; result: str
   return { node_id: op.target, result: `merged ${op.source} into ${op.target}` };
 }
 
-function handleDrop(op: DropOp, agent: string): { node_id: string; result: string } {
+function handleDrop(op: DropOp, agent: string, decisionContext?: string): { node_id: string; result: string } {
   const now = new Date().toISOString();
 
   // Get all descendants
@@ -214,12 +215,13 @@ function handleDrop(op: DropOp, agent: string): { node_id: string; result: strin
       agent,
       resolved: true,
       add_evidence: [{ type: "dropped", ref: op.reason }],
+      decision_context: decisionContext,
     });
 
     logEvent(id, agent, "dropped", [
       { field: "resolved", before: false, after: true },
       { field: "reason", before: null, after: op.reason },
-    ]);
+    ], decisionContext);
   }
 
   return {
@@ -228,7 +230,7 @@ function handleDrop(op: DropOp, agent: string): { node_id: string; result: strin
   };
 }
 
-function handleDelete(op: DeleteOp, agent: string): { node_id: string; result: string } {
+function handleDelete(op: DeleteOp, agent: string, _decisionContext?: string): { node_id: string; result: string } {
   const db = getDb();
   const node = getNodeOrThrow(op.node_id);
 
@@ -292,26 +294,27 @@ export function handleRestructure(
   const details: Array<{ op: string; node_id: string; result: string }> = [];
   let project: string | null = null;
 
+  const dc = input.decision_context;
   const transaction = db.transaction(() => {
     for (const op of operations) {
       let detail: { node_id: string; result: string };
 
       switch (op.op) {
         case "move":
-          detail = handleMove(op, agent);
+          detail = handleMove(op, agent, dc);
           project = getNode(op.node_id)?.project ?? project;
           break;
         case "merge":
-          detail = handleMerge(op, agent);
+          detail = handleMerge(op, agent, dc);
           project = getNode(op.target)?.project ?? project;
           break;
         case "drop":
-          detail = handleDrop(op, agent);
+          detail = handleDrop(op, agent, dc);
           project = getNode(op.node_id)?.project ?? project;
           break;
         case "delete":
           project = getNode(op.node_id)?.project ?? project;
-          detail = handleDelete(op, agent);
+          detail = handleDelete(op, agent, dc);
           break;
         default:
           throw new Error(`Unknown operation: ${(op as RestructureOp).op}`);

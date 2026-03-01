@@ -127,6 +127,7 @@ export interface Event {
   action: string;
   changes: FieldChange[];
   timestamp: string;
+  decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
 }
 
 export interface FieldChange {

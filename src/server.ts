@@ -26,6 +26,7 @@ import { handleKnowledgeWrite, handleKnowledgeWriteBatch, handleKnowledgeRead, h
 import { handleRetro } from "./tools/retro.js";
 import { handleKnowledgeAudit } from "./tools/knowledge-audit.js";
 import { handleResolve } from "./tools/resolve.js";
+import { handleRoadmap } from "./tools/roadmap.js";
 import { getLicenseTier, type Tier } from "./license.js";
 import { checkNodeLimit, checkProjectLimit, capEvidenceLimit, checkScope, checkKnowledgeTier } from "./gates.js";
 
@@ -172,6 +173,7 @@ const TOOLS = [
           },
           description: "Nodes to create",
         },
+        decision_context: { type: "string", description: "Why these nodes are being created. Logged in event history on all created nodes for traceability." },
       },
       required: ["nodes"],
     },
@@ -191,6 +193,10 @@ const TOOLS = [
         filter: {
           type: "object",
           description: "Match against node properties",
+        },
+        ancestor_filter: {
+          type: "object",
+          description: "Filter candidates by ancestor properties. Only returns nodes that have an ancestor matching all specified properties (e.g. {horizon: \"now\"} returns only nodes under a horizon:now ancestor).",
         },
         count: {
           type: "number",
@@ -273,6 +279,7 @@ const TOOLS = [
             required: ["node_id"],
           },
         },
+        decision_context: { type: "string", description: "Why these changes are being made. Logged in event history on all updated nodes for traceability." },
       },
       required: ["updates"],
     },
@@ -303,6 +310,7 @@ const TOOLS = [
             required: ["from", "to", "type"],
           },
         },
+        decision_context: { type: "string", description: "Why these edges are being added/removed. Logged in event history on affected nodes for traceability." },
       },
       required: ["edges"],
     },
@@ -373,6 +381,7 @@ const TOOLS = [
             required: ["op"],
           },
         },
+        decision_context: { type: "string", description: "Why this restructuring is happening. Logged in event history on all affected nodes for traceability." },
       },
       required: ["operations"],
     },
@@ -441,6 +450,25 @@ const TOOLS = [
         project: {
           type: "string",
           description: "Project name. Omit to auto-select (works when there's exactly one project).",
+        },
+      },
+    },
+  },
+  {
+    name: "graph_roadmap",
+    description:
+      "Returns a compact release-pipeline view of a project. Groups by horizon (now/next/later/paused), shows progress per release, at_risk flags (PM-flagged + inferred from blockers/staleness), and last decision from events. Falls back to flat release list when no horizon properties are set. Omit project to auto-select.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        project: {
+          type: "string",
+          description: "Project name. Omit to auto-select (works when there's exactly one project).",
+        },
+        detail: {
+          type: "string",
+          enum: ["brief", "full"],
+          description: "Response detail level. 'brief' (default) omits last_decision timestamps. 'full' includes everything.",
         },
       },
     },
@@ -610,6 +638,7 @@ const TOOLS = [
           },
           required: ["key", "content"],
         },
+        decision_context: { type: "string", description: "Why this resolution is happening. Logged in event history for traceability." },
       },
       required: ["node_id", "message"],
     },
@@ -723,6 +752,10 @@ export async function startServer(): Promise<void> {
 
         case "graph_status":
           result = handleStatus(args as any);
+          break;
+
+        case "graph_roadmap":
+          result = handleRoadmap(args as any);
           break;
 
         case "graph_agent_config":

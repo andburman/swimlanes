@@ -23,12 +23,19 @@ export interface UpdateEntry {
 
 export interface UpdateInput {
   updates: UpdateEntry[];
+  decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
+}
+
+export interface AutoResolvedEntry {
+  node_id: string;
+  summary: string;
+  children_summary?: Array<{ id: string; summary: string; resolved_at: string }>;
 }
 
 export interface UpdateResult {
   updated: Array<{ node_id: string; rev: number }>;
   newly_actionable?: Array<{ id: string; summary: string }>;
-  auto_resolved?: Array<{ node_id: string; summary: string }>;
+  auto_resolved?: AutoResolvedEntry[];
   evidence_warnings?: string[];
   retro_nudge?: string;
 }
@@ -50,7 +57,7 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
   const updated: Array<{ node_id: string; rev: number }> = [];
   const resolvedIds: string[] = [];
   const resolvedProjects = new Set<string>();
-  const autoResolved: Array<{ node_id: string; summary: string }> = [];
+  const autoResolved: AutoResolvedEntry[] = [];
 
   const runUpdates = db.transaction(() => {
   for (const entry of updates) {
@@ -62,6 +69,23 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
           "rev_mismatch",
           `Node ${entry.node_id} has rev ${current.rev}, expected ${entry.expected_rev}. Another agent may have modified it. Re-read and retry.`
         );
+      }
+    }
+
+    // [sl:0hYsWpHub_T8Z3ser3WvT] Block manual resolve when parent has unresolved children
+    if (entry.resolved === true) {
+      const current = getNodeOrThrow(entry.node_id);
+      if (!current.resolved) {
+        const children = getChildren(entry.node_id);
+        const unresolved = children.filter(c => !c.resolved);
+        if (unresolved.length > 0) {
+          const list = unresolved.slice(0, 5).map(c => `${c.id} "${c.summary}"`).join(", ");
+          const more = unresolved.length > 5 ? ` +${unresolved.length - 5} more` : "";
+          throw new EngineError(
+            "unresolved_children",
+            `Cannot resolve: ${unresolved.length} unresolved child(ren) (${list}${more}). Move them with graph_restructure or drop them with graph_update first.`
+          );
+        }
       }
     }
 
@@ -85,6 +109,7 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
       add_context_links: entry.add_context_links,
       remove_context_links: entry.remove_context_links,
       add_evidence: evidence,
+      decision_context: input.decision_context,
     });
 
     // [sl:rIuWFYZUQAhN0ViM9y0Ey] Strict solo mode enforcement on resolve
@@ -121,7 +146,9 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
     }
   }
 
-  // [sl:GBuFbmTFuFfnl5KWW-ja-] Auto-resolve parents when all children are resolved
+  // [sl:GBuFbmTFuFfnl5KWW-ja-] [sl:0hYsWpHub_T8Z3ser3WvT] Auto-resolve parents when all children are resolved
+  // Default: cascade 1 level. Opt-out: properties.auto_resolve === false.
+  // Unlimited cascade: properties.cascade_resolve === true on the auto-resolved parent.
   if (resolvedIds.length > 0) {
     const seen = new Set<string>(resolvedIds);
     const queue = [...resolvedIds];
@@ -138,19 +165,38 @@ export function handleUpdate(input: UpdateInput, agent: string): UpdateResult {
       const parent = getNode(parentId);
       if (!parent || parent.resolved) continue;
 
+      // Opt-out: skip if parent explicitly disabled auto-resolve
+      if (parent.properties.auto_resolve === false) continue;
+
       const children = getChildren(parentId);
       if (children.length === 0) continue;
       if (children.every((c) => c.resolved)) {
+        // Build children summary for evidence
+        const childrenSummary = children.map(c => ({
+          id: c.id,
+          summary: c.summary,
+          resolved_at: c.updated_at,
+        }));
         const resolved = updateNode({
           node_id: parentId,
           agent,
           resolved: true,
-          add_evidence: [{ type: "note", ref: "Auto-resolved: all children completed" }],
+          add_evidence: [{
+            type: "auto_resolve",
+            ref: `${children.length}/${children.length} children resolved`,
+          }],
         });
         updated.push({ node_id: resolved.id, rev: resolved.rev });
         resolvedIds.push(parentId);
-        autoResolved.push({ node_id: parentId, summary: parent.summary });
-        queue.push(parentId);
+        autoResolved.push({ node_id: parentId, summary: parent.summary, children_summary: childrenSummary });
+
+        // Cascade control: only continue up if the just-resolved parent has cascade_resolve: true,
+        // OR if the trigger was a directly resolved node (1 level default).
+        // After 1 auto-resolve, stop unless cascade_resolve is set.
+        if (parent.properties.cascade_resolve === true) {
+          queue.push(parentId);
+        }
+        // Default: don't push to queue — stops after 1 level
       }
     }
   }

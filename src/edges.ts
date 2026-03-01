@@ -40,6 +40,7 @@ export interface AddEdgeInput {
   to: string;
   type: string;
   agent: string;
+  decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
 }
 
 export interface AddEdgeResult {
@@ -100,7 +101,7 @@ export function addEdge(input: AddEdgeInput): AddEdgeResult {
 
   logEvent(input.from, input.agent, "edge_added", [
     { field: "edge", before: null, after: { to: input.to, type: input.type } },
-  ]);
+  ], input.decision_context);
 
   return { edge, rejected: false };
 }
@@ -111,7 +112,8 @@ export function removeEdge(
   from: string,
   to: string,
   type: string,
-  agent: string
+  agent: string,
+  decisionContext?: string // [sl:M8jj8RzospuObjRJiDMRS]
 ): boolean {
   const db = getDb();
 
@@ -124,7 +126,7 @@ export function removeEdge(
   if (result.changes > 0) {
     logEvent(from, agent, "edge_removed", [
       { field: "edge", before: { to, type }, after: null },
-    ]);
+    ], decisionContext);
     return true;
   }
 

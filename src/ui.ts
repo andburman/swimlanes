@@ -328,11 +328,65 @@ function apiTree(db: Db, res: ServerResponse): void {
   });
 }
 
-function apiProjectKnowledge(db: Db, project: string, res: ServerResponse): void {
+// [sl:-Rywfq79fcNs8Bnwe5rfE] Knowledge API with category, source_node, days_stale
+function knowledgeRows(db: Db, projectFilter?: string) {
+  const cols = db.prepare("PRAGMA table_info(knowledge)").all() as Array<{ name: string }>;
+  const hasCategory = cols.some(c => c.name === "category");
+  const catCol = hasCategory ? "category," : "";
+  const where = projectFilter ? "WHERE project = ?" : "";
+  const params = projectFilter ? [projectFilter] : [];
   const rows = db.prepare(
-    "SELECT key, content, created_by, created_at, updated_at FROM knowledge WHERE project = ? ORDER BY updated_at DESC"
-  ).all(project) as Array<{ key: string; content: string; created_by: string; created_at: string; updated_at: string }>;
+    `SELECT project, key, content, ${catCol} source_node, created_by, created_at, updated_at FROM knowledge ${where} ORDER BY updated_at DESC`
+  ).all(...params) as Array<{
+    project: string; key: string; content: string; category?: string; source_node: string | null;
+    created_by: string; created_at: string; updated_at: string;
+  }>;
 
+  const sourceIds = [...new Set(rows.map(r => r.source_node).filter((id): id is string => id !== null))];
+  const sourceMap = new Map<string, { summary: string; resolved: boolean }>();
+  if (sourceIds.length > 0) {
+    const ph = sourceIds.map(() => "?").join(",");
+    const nodes = db.prepare(
+      `SELECT id, summary, resolved FROM nodes WHERE id IN (${ph})`
+    ).all(...sourceIds) as Array<{ id: string; summary: string; resolved: number }>;
+    for (const n of nodes) sourceMap.set(n.id, { summary: n.summary, resolved: n.resolved === 1 });
+  }
+
+  const now = Date.now();
+  return rows.map(r => ({
+    project: r.project,
+    key: r.key,
+    content: r.content,
+    category: r.category ?? "general",
+    source_node: r.source_node ? {
+      id: r.source_node,
+      ...(sourceMap.get(r.source_node) ?? { summary: "(deleted)", resolved: false }),
+    } : null,
+    created_by: r.created_by,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    days_stale: Math.floor((now - new Date(r.updated_at).getTime()) / (1000 * 60 * 60 * 24)),
+  }));
+}
+
+function apiProjectKnowledge(db: Db, project: string, res: ServerResponse): void {
+  json(res, knowledgeRows(db, project));
+}
+
+function apiAllKnowledge(db: Db, res: ServerResponse): void {
+  json(res, knowledgeRows(db));
+}
+
+function apiKnowledgeLog(db: Db, project: string, key: string, res: ServerResponse): void {
+  // knowledge_log table may not exist if migration hasn't run
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_log'").all();
+  if (tables.length === 0) { json(res, []); return; }
+  const rows = db.prepare(
+    "SELECT action, old_content, new_content, agent, timestamp FROM knowledge_log WHERE project = ? AND key = ? ORDER BY timestamp DESC"
+  ).all(project, key) as Array<{
+    action: string; old_content: string | null; new_content: string | null;
+    agent: string; timestamp: string;
+  }>;
   json(res, rows);
 }
 
@@ -2624,20 +2678,29 @@ export function startUi(args: string[]): void {
     if (path === "/api/health") {
       const projects = (db.prepare("SELECT COUNT(DISTINCT project) as cnt FROM nodes").get() as { cnt: number }).cnt;
       const nodes = (db.prepare("SELECT COUNT(*) as cnt FROM nodes").get() as { cnt: number }).cnt;
-      json(res, { version: PKG_VERSION, projects, nodes });
+      json(res, { version: PKG_VERSION, projects, nodes, db_path: dbPaths[0] });
       return;
     }
 
     // [sl:HPQEBiSm4Ms25s8z-apl6] Lightweight change-detection endpoint for polling
+    // [sl:-Rywfq79fcNs8Bnwe5rfE] Include knowledge timestamps for knowledge UI polling
     if (path === "/api/changes") {
-      const row = db.prepare("SELECT MAX(updated_at) as latest, COUNT(*) as cnt FROM nodes").get() as { latest: string; cnt: number };
-      json(res, { latest: row.latest, count: row.cnt });
+      const nodeRow = db.prepare("SELECT MAX(updated_at) as latest, COUNT(*) as cnt FROM nodes").get() as { latest: string | null; cnt: number };
+      const kRow = db.prepare("SELECT MAX(updated_at) as latest, COUNT(*) as cnt FROM knowledge").get() as { latest: string | null; cnt: number };
+      const latest = [nodeRow.latest, kRow.latest].filter(Boolean).sort().pop() ?? null;
+      json(res, { latest, count: nodeRow.cnt, knowledge_count: kRow.cnt });
       return;
     }
 
     // /api/projects
     if (path === "/api/projects") {
       apiProjects(db, res);
+      return;
+    }
+
+    // /api/knowledge — all knowledge entries across all projects
+    if (path === "/api/knowledge") {
+      apiAllKnowledge(db, res);
       return;
     }
 
@@ -2650,6 +2713,13 @@ export function startUi(args: string[]): void {
     // /api/onboard — aggregate onboard across all projects
     if (path === "/api/onboard") {
       apiOnboard(db, res);
+      return;
+    }
+
+    // /api/projects/:name/knowledge/:key/log
+    const kLogMatch = path.match(/^\/api\/projects\/([^/]+)\/knowledge\/([^/]+)\/log$/);
+    if (kLogMatch && req.method === "GET") {
+      apiKnowledgeLog(db, decodeURIComponent(kLogMatch[1]), decodeURIComponent(kLogMatch[2]), res);
       return;
     }
 

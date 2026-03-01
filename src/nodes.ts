@@ -44,6 +44,7 @@ export interface CreateNodeInput {
   properties?: Record<string, unknown>;
   context_links?: string[];
   agent: string;
+  decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
 }
 
 export function createNode(input: CreateNodeInput): Node {
@@ -107,7 +108,7 @@ export function createNode(input: CreateNodeInput): Node {
 
   logEvent(node.id, input.agent, "created", [
     { field: "summary", before: null, after: node.summary },
-  ]);
+  ], input.decision_context);
 
   return node;
 }
@@ -213,6 +214,7 @@ export interface UpdateNodeInput {
   add_context_links?: string[];
   remove_context_links?: string[];
   add_evidence?: Array<{ type: string; ref: string }>;
+  decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
 }
 
 export function updateNode(input: UpdateNodeInput): Node {
@@ -381,7 +383,7 @@ export function updateNode(input: UpdateNodeInput): Node {
   );
 
   const action = input.resolved === true ? "resolved" : "updated";
-  logEvent(input.node_id, input.agent, action, changes);
+  logEvent(input.node_id, input.agent, action, changes, input.decision_context);
 
   return getNodeOrThrow(input.node_id);
 }

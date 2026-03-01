@@ -184,6 +184,15 @@ function migrate(db: Database.Database): void {
   if (!knowledgeCols.has("category")) {
     db.exec("ALTER TABLE knowledge ADD COLUMN category TEXT NOT NULL DEFAULT 'general'");
   }
+
+  // [sl:M8jj8RzospuObjRJiDMRS] Add decision_context to events — traces mutations back to decisions
+  const eventCols = new Set(
+    (db.prepare("SELECT name FROM pragma_table_info('events')").all() as Array<{ name: string }>)
+      .map(c => c.name)
+  );
+  if (!eventCols.has("decision_context")) {
+    db.exec("ALTER TABLE events ADD COLUMN decision_context TEXT DEFAULT NULL");
+  }
 }
 
 export function checkpointDb(): void {

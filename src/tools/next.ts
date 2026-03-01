@@ -8,6 +8,7 @@ export interface NextInput {
   project: string;
   scope?: string;
   filter?: Record<string, unknown>;
+  ancestor_filter?: Record<string, unknown>; // [sl:Wa6zadcxIgzv187Csoqy8]
   count?: number;
   claim?: boolean;
 }
@@ -104,11 +105,52 @@ export function handleNext(
     scopeParams.push(...descendantIds.map((d) => d.id));
   }
 
+  // [sl:Wa6zadcxIgzv187Csoqy8] Ancestor filter: restrict to descendants of nodes matching property criteria
+  let ancestorFilter = "";
+  const ancestorParams: unknown[] = [];
+  if (input.ancestor_filter && Object.keys(input.ancestor_filter).length > 0) {
+    // Find ancestor nodes matching all specified properties
+    let matchQuery = `SELECT id FROM nodes WHERE project = ?`;
+    const matchParams: unknown[] = [project];
+    for (const [key, value] of Object.entries(input.ancestor_filter)) {
+      matchQuery += " AND json_extract(properties, ?) = ?";
+      matchParams.push(`$.${key}`, value as string | number | boolean);
+    }
+    const matchingAncestors = db.prepare(matchQuery).all(...matchParams) as Array<{ id: string }>;
+
+    if (matchingAncestors.length === 0) {
+      return { nodes: [] };
+    }
+
+    // Collect all descendants of matching ancestors (plus the ancestors themselves)
+    const allowedIds = new Set<string>();
+    for (const anc of matchingAncestors) {
+      allowedIds.add(anc.id);
+      const descs = db.prepare(
+        `WITH RECURSIVE descendants(id) AS (
+          SELECT id FROM nodes WHERE parent = ?
+          UNION ALL
+          SELECT n.id FROM nodes n JOIN descendants d ON n.parent = d.id
+        )
+        SELECT id FROM descendants`
+      ).all(anc.id) as Array<{ id: string }>;
+      for (const d of descs) allowedIds.add(d.id);
+    }
+
+    if (allowedIds.size === 0) {
+      return { nodes: [] };
+    }
+    const ids = [...allowedIds];
+    ancestorFilter = `AND n.id IN (${ids.map(() => "?").join(",")})`;
+    ancestorParams.push(...ids);
+  }
+
   // Find actionable nodes: unresolved, not blocked, leaf (no unresolved children), all deps resolved
   let query = `
     SELECT n.* FROM nodes n
     WHERE n.project = ? AND n.resolved = 0 AND n.blocked = 0
     ${scopeFilter}
+    ${ancestorFilter}
     AND NOT EXISTS (
       SELECT 1 FROM nodes child WHERE child.parent = n.id AND child.resolved = 0
     )
@@ -119,7 +161,7 @@ export function handleNext(
     )
   `;
 
-  const params: unknown[] = [project, ...scopeParams];
+  const params: unknown[] = [project, ...scopeParams, ...ancestorParams];
 
   // Skip nodes claimed by other agents (if claim TTL hasn't expired)
   const claimCutoff = new Date(

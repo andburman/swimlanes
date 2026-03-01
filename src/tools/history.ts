@@ -14,6 +14,7 @@ export interface HistoryResult {
     agent: string;
     action: string;
     changes: Array<{ field: string; before: unknown; after: unknown }>;
+    decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
   }>;
   next_cursor?: string;
 }
@@ -28,12 +29,16 @@ export function handleHistory(input: HistoryInput): HistoryResult {
   const { events, next_cursor } = getEvents(nodeId, limit, cursor);
 
   const result: HistoryResult = {
-    events: events.map((e) => ({
-      timestamp: e.timestamp,
-      agent: e.agent,
-      action: e.action,
-      changes: e.changes,
-    })),
+    events: events.map((e) => {
+      const ev: HistoryResult["events"][number] = {
+        timestamp: e.timestamp,
+        agent: e.agent,
+        action: e.action,
+        changes: e.changes,
+      };
+      if (e.decision_context) ev.decision_context = e.decision_context;
+      return ev;
+    }),
   };
 
   if (next_cursor) {

@@ -3,15 +3,16 @@ import { getDb } from "./db.js";
 import type { FieldChange, Event } from "./types.js";
 
 const INSERT_EVENT = `
-  INSERT INTO events (id, node_id, agent, action, changes, timestamp)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO events (id, node_id, agent, action, changes, timestamp, decision_context)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
 `;
 
 export function logEvent(
   nodeId: string,
   agent: string,
   action: string,
-  changes: FieldChange[]
+  changes: FieldChange[],
+  decisionContext?: string // [sl:M8jj8RzospuObjRJiDMRS]
 ): Event {
   const db = getDb();
   const event: Event = {
@@ -23,13 +24,18 @@ export function logEvent(
     timestamp: new Date().toISOString(),
   };
 
+  if (decisionContext) {
+    event.decision_context = decisionContext;
+  }
+
   db.prepare(INSERT_EVENT).run(
     event.id,
     event.node_id,
     event.agent,
     event.action,
     JSON.stringify(event.changes),
-    event.timestamp
+    event.timestamp,
+    event.decision_context ?? null
   );
 
   return event;
@@ -70,19 +76,26 @@ export function getEvents(
     action: string;
     changes: string;
     timestamp: string;
+    decision_context: string | null;
   }>;
 
   const hasMore = rows.length > limit;
   const slice = hasMore ? rows.slice(0, limit) : rows;
 
-  const events: Event[] = slice.map((row) => ({
-    id: row.id,
-    node_id: row.node_id,
-    agent: row.agent,
-    action: row.action,
-    changes: JSON.parse(row.changes),
-    timestamp: row.timestamp,
-  }));
+  const events: Event[] = slice.map((row) => {
+    const event: Event = {
+      id: row.id,
+      node_id: row.node_id,
+      agent: row.agent,
+      action: row.action,
+      changes: JSON.parse(row.changes),
+      timestamp: row.timestamp,
+    };
+    if (row.decision_context) {
+      event.decision_context = row.decision_context;
+    }
+    return event;
+  });
 
   return {
     events,

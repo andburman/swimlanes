@@ -3,851 +3,443 @@ import './App.css'
 
 // --- Types ---
 
-interface ProjectSummary {
+interface KnowledgeEntry {
   project: string
-  id: string
-  summary: string
-  total: number
-  resolved: number
-  unresolved: number
-  blocked: number
-  actionable: number
-}
-
-interface NodeData {
-  id: string
-  summary: string
-  resolved: boolean
-  depth: number
-  discovery: string | null
-  blocked: boolean
-  blocked_reason: string | null
-  properties: Record<string, unknown>
-  evidence: Array<{ type: string; ref: string; agent: string; timestamp: string }>
-  context_links: string[]
-  parent: string | null
-  project: string
+  key: string
+  content: string
+  category: string
+  source_node: { id: string; summary: string; resolved: boolean } | null
+  created_by: string
   created_at: string
   updated_at: string
+  days_stale: number
 }
 
-interface TreeNode extends NodeData {
-  children?: TreeNode[]
-}
-
-interface TreeApiResponse {
-  project: string
-  root_id: string
-  nodes: NodeData[]
-  edges: Array<{ from_node: string; to_node: string; type: string }>
-  stats: { total: number; resolved: number; unresolved: number }
-}
-
-// Aggregated intent types
-
-interface OpenDecision {
-  id: string
-  question: string
-  status: string
-  answer?: string
-  rationale?: string
-  nodeId: string
-  nodeSummary: string
-}
-
-interface UntestedAssumption {
-  id: string
-  text: string
-  status: string
-  nodeId: string
-  nodeSummary: string
-}
-
-interface UnscopedEdgeCase {
-  id: string
-  case: string
-  scope: string | null
-  handling?: string
-  nodeId: string
-  nodeSummary: string
-}
-
-interface UnconfirmedDod {
-  id: string
-  criterion: string
-  met: boolean | null
-  nodeId: string
-  nodeSummary: string
-}
-
-type DiscoveryPhase = 'raw' | 'decomposed' | 'in_review' | 'deciding' | 'ready'
-
-interface IntentSummary {
-  node: TreeNode
-  progress: { resolved: number; total: number }
-  worstPhase: DiscoveryPhase
-  phaseCounts: Record<DiscoveryPhase, number>
-  openDecisions: OpenDecision[]
-  untestedAssumptions: UntestedAssumption[]
-  unscopedEdgeCases: UnscopedEdgeCase[]
-  unconfirmedDod: UnconfirmedDod[]
-  blockedNodes: Array<{ id: string; summary: string; reason: string | null }>
-  staleNodes: Array<{ id: string; summary: string; daysSince: number }>
-  priority: number | undefined
-  project: string
-  updatedAt: string
-}
-
-function buildTree(nodes: NodeData[]): TreeNode[] {
-  const map = new Map<string, TreeNode>()
-  const roots: TreeNode[] = []
-  for (const n of nodes) {
-    map.set(n.id, { ...n, children: [] })
-  }
-  for (const n of nodes) {
-    const treeNode = map.get(n.id)!
-    if (n.parent && map.has(n.parent)) {
-      map.get(n.parent)!.children!.push(treeNode)
-    } else {
-      roots.push(treeNode)
-    }
-  }
-  return roots
+interface LogEntry {
+  action: string
+  old_content: string | null
+  new_content: string | null
+  agent: string
+  timestamp: string
 }
 
 // --- Helpers ---
 
-function getTheme(): 'dark' | 'light' {
-  return (localStorage.getItem('graph-ui-theme') as 'dark' | 'light') || 'dark'
-}
-
-function timeAgo(dateStr: string | null | undefined): string {
-  if (!dateStr) return ''
-  const diff = Date.now() - new Date(dateStr).getTime()
-  if (isNaN(diff)) return ''
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime()
   const mins = Math.floor(diff / 60000)
-  if (mins < 60) return `${mins}m`
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
   const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h`
+  if (hours < 24) return `${hours}h ago`
   const days = Math.floor(hours / 24)
-  return `${days}d`
+  if (days === 1) return 'yesterday'
+  return `${days}d ago`
 }
 
-type DiscoveryArtifacts = {
-  assumptions?: Array<{ id: string; text: string; status: string; response?: string }>
-  decisions?: Array<{ id: string; question: string; status: string; answer?: string; rationale?: string }>
-  edge_cases?: Array<{ id: string; case: string; scope: string | null; handling?: string }>
-  definition_of_done?: Array<{ id: string; criterion: string; met: boolean | null }>
+const CATEGORY_COLORS: Record<string, string> = {
+  architecture: 'var(--color-blue)',
+  convention: 'var(--color-purple)',
+  decision: 'var(--color-orange)',
+  'api-contract': 'var(--color-green)',
+  discovery: 'var(--color-yellow)',
+  environment: 'var(--color-text-tertiary)',
+  general: 'var(--color-text-secondary)',
 }
 
-function computeDiscoveryPhase(node: NodeData): DiscoveryPhase {
-  const artifacts = node.properties?.discovery_artifacts as DiscoveryArtifacts | undefined
-
-  if (!artifacts) return 'raw'
-
-  const assumptions = artifacts.assumptions || []
-  const decisions = artifacts.decisions || []
-  const edgeCases = artifacts.edge_cases || []
-  const dod = artifacts.definition_of_done || []
-
-  if (decisions.some(d => d.status === 'open')) return 'deciding'
-  if (assumptions.length > 0 && assumptions.some(a => a.status === 'untested')) return 'decomposed'
-
-  const unscopedEdges = edgeCases.some(e => e.scope === null)
-  const unmetDod = dod.length === 0 || dod.some(d => d.met === null)
-  if (assumptions.length > 0 && (unscopedEdges || unmetDod)) return 'in_review'
-
-  if (assumptions.length > 0) return 'ready'
-
-  return 'raw'
+function categoryColor(cat: string): string {
+  return CATEGORY_COLORS[cat] ?? 'var(--color-text-secondary)'
 }
 
-function phaseLabel(phase: DiscoveryPhase): string {
-  switch (phase) {
-    case 'raw': return 'raw'
-    case 'decomposed': return 'decomposed'
-    case 'in_review': return 'in review'
-    case 'deciding': return 'deciding'
-    case 'ready': return 'ready'
-  }
-}
-
-function phaseOrder(phase: DiscoveryPhase): number {
-  switch (phase) {
-    case 'deciding': return 0
-    case 'in_review': return 1
-    case 'decomposed': return 2
-    case 'raw': return 3
-    case 'ready': return 4
-  }
-}
-
-// --- Aggregation ---
-
-function collectDescendants(node: TreeNode): TreeNode[] {
-  const result: TreeNode[] = []
-  const walk = (n: TreeNode) => {
-    for (const child of n.children || []) {
-      result.push(child)
-      walk(child)
-    }
-  }
-  walk(node)
-  return result
-}
-
-function aggregateIntent(intentNode: TreeNode, project: string): IntentSummary {
-  const descendants = collectDescendants(intentNode)
-  const allNodes = [intentNode, ...descendants]
-
-  const total = allNodes.length
-  const resolved = allNodes.filter(n => n.resolved).length
-
-  let worstPhase: DiscoveryPhase = 'ready'
-  const phaseCounts: Record<DiscoveryPhase, number> = { raw: 0, decomposed: 0, in_review: 0, deciding: 0, ready: 0 }
-
-  const openDecisions: OpenDecision[] = []
-  const untestedAssumptions: UntestedAssumption[] = []
-  const unscopedEdgeCases: UnscopedEdgeCase[] = []
-  const unconfirmedDod: UnconfirmedDod[] = []
-  const blockedNodes: Array<{ id: string; summary: string; reason: string | null }> = []
-  const staleNodes: Array<{ id: string; summary: string; daysSince: number }> = []
-
-  for (const n of allNodes) {
-    if (n.resolved) continue
-
-    const phase = computeDiscoveryPhase(n)
-    phaseCounts[phase]++
-    if (phaseOrder(phase) < phaseOrder(worstPhase)) {
-      worstPhase = phase
-    }
-
-    if (n.blocked) {
-      blockedNodes.push({ id: n.id, summary: n.summary, reason: n.blocked_reason })
-    }
-
-    const daysSince = (Date.now() - new Date(n.updated_at).getTime()) / (1000 * 60 * 60 * 24)
-    if (daysSince > 3) {
-      staleNodes.push({ id: n.id, summary: n.summary, daysSince: Math.round(daysSince) })
-    }
-
-    const artifacts = n.properties?.discovery_artifacts as DiscoveryArtifacts | undefined
-    if (!artifacts) continue
-
-    const shortName = n.summary.slice(0, 40)
-
-    for (const d of artifacts.decisions || []) {
-      if (d.status === 'open') {
-        openDecisions.push({ ...d, nodeId: n.id, nodeSummary: shortName })
-      }
-    }
-    for (const a of artifacts.assumptions || []) {
-      if (a.status === 'untested') {
-        untestedAssumptions.push({ ...a, nodeId: n.id, nodeSummary: shortName })
-      }
-    }
-    for (const e of artifacts.edge_cases || []) {
-      if (e.scope === null) {
-        unscopedEdgeCases.push({ ...e, nodeId: n.id, nodeSummary: shortName })
-      }
-    }
-    for (const d of artifacts.definition_of_done || []) {
-      if (d.met === null) {
-        unconfirmedDod.push({ ...d, nodeId: n.id, nodeSummary: shortName })
-      }
-    }
-  }
-
-  staleNodes.sort((a, b) => b.daysSince - a.daysSince)
-
-  const priority = intentNode.properties?.priority as number | undefined
-  const updatedAt = allNodes.reduce(
-    (latest, n) => (n.updated_at > latest ? n.updated_at : latest),
-    intentNode.updated_at,
-  )
-
-  return {
-    node: intentNode,
-    progress: { resolved, total },
-    worstPhase,
-    phaseCounts,
-    openDecisions,
-    untestedAssumptions,
-    unscopedEdgeCases,
-    unconfirmedDod,
-    blockedNodes,
-    staleNodes,
-    priority,
-    project,
-    updatedAt,
-  }
-}
-
-function getIntentSignal(intent: IntentSummary): { type: string; message: string } | null {
-  if (intent.blockedNodes.length > 0) {
-    const n = intent.blockedNodes.length
-    return { type: 'blocked', message: `${n} blocked` }
-  }
-  if (intent.openDecisions.length > 0) {
-    const n = intent.openDecisions.length
-    return { type: 'decisions', message: `${n} decision${n !== 1 ? 's' : ''} waiting` }
-  }
-  if (intent.untestedAssumptions.length > 0) {
-    const n = intent.untestedAssumptions.length
-    return { type: 'assumptions', message: `${n} assumption${n !== 1 ? 's' : ''} to validate` }
-  }
-  const reviewCount = intent.unscopedEdgeCases.length + intent.unconfirmedDod.length
-  if (reviewCount > 0) {
-    return { type: 'review', message: `${reviewCount} item${reviewCount !== 1 ? 's' : ''} to review` }
-  }
-  if (intent.staleNodes.length > 0) {
-    const n = intent.staleNodes.length
-    return { type: 'stale', message: `${n} stale` }
-  }
-  return null
+// Unique key across projects (entries in different projects can share keys)
+function entryId(e: KnowledgeEntry): string {
+  return `${e.project}::${e.key}`
 }
 
 // --- Components ---
 
-function Header({ theme, onToggleTheme, projects }: {
-  theme: 'dark' | 'light'
-  onToggleTheme: () => void
-  projects: ProjectSummary[]
-}) {
-  const totalUnresolved = projects.reduce((s, p) => s + p.unresolved, 0)
-  const totalBlocked = projects.reduce((s, p) => s + p.blocked, 0)
-
+function CategoryBadge({ category }: { category: string }) {
+  const color = categoryColor(category)
   return (
-    <header className="header">
-      <div className="header-left">
-        <span className="header-title">Graph</span>
-      </div>
-      <div className="header-right">
-        <div className="metric">
-          <span className={`metric-dot ${totalBlocked > 0 ? 'red' : 'green'}`} />
-          <span>{totalUnresolved} open</span>
-        </div>
-        {totalBlocked > 0 && (
-          <div className="metric">
-            <span className="metric-dot orange" />
-            <span>{totalBlocked} blocked</span>
-          </div>
-        )}
-        <button className="theme-toggle" onClick={onToggleTheme}>
-          {theme === 'dark' ? '☀' : '☾'}
-        </button>
-      </div>
-    </header>
+    <span className="category-badge" style={{ color, borderColor: color }}>
+      {category}
+    </span>
   )
 }
 
-function IntentRow({ intent, isSelected, onClick }: {
-  intent: IntentSummary
-  isSelected: boolean
-  onClick: () => void
+function ProjectBadge({ project }: { project: string }) {
+  return <span className="project-badge">{project}</span>
+}
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState(() =>
+    localStorage.getItem('graph-theme') ?? 'dark'
+  )
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('graph-theme', theme)
+  }, [theme])
+  return (
+    <button
+      className="theme-toggle"
+      onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+      title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+    >
+      {theme === 'dark' ? '◑' : '◐'}
+    </button>
+  )
+}
+
+function EntryList({
+  entries,
+  selectedId,
+  onSelect,
+  search,
+  onSearchChange,
+  categoryFilter,
+  onCategoryFilter,
+  projectFilter,
+  onProjectFilter,
+}: {
+  entries: KnowledgeEntry[]
+  selectedId: string | null
+  onSelect: (entry: KnowledgeEntry) => void
+  search: string
+  onSearchChange: (s: string) => void
+  categoryFilter: string | null
+  onCategoryFilter: (cat: string | null) => void
+  projectFilter: string | null
+  onProjectFilter: (proj: string | null) => void
 }) {
-  const signal = getIntentSignal(intent)
-  const { resolved, total } = intent.progress
-  const pct = total > 0 ? Math.round((resolved / total) * 100) : 0
-  const hasChildren = (intent.node.children || []).length > 0
+  const categories = [...new Set(entries.map(e => e.category))].sort()
+  const projects = [...new Set(entries.map(e => e.project))].sort()
+
+  // Filter
+  const filtered = entries.filter(e => {
+    if (categoryFilter && e.category !== categoryFilter) return false
+    if (projectFilter && e.project !== projectFilter) return false
+    if (search) {
+      const q = search.toLowerCase()
+      return e.key.toLowerCase().includes(q) || e.content.toLowerCase().includes(q)
+    }
+    return true
+  })
 
   return (
-    <div className={`intent-item ${isSelected ? 'selected' : ''}`} onClick={onClick}>
-      <div className="intent-item-row1">
-        <span className="intent-item-tag">{intent.project}</span>
-        <span className="intent-item-summary">{intent.node.summary}</span>
-        <span className="intent-item-age">{timeAgo(intent.updatedAt)}</span>
+    <div className="entry-list">
+      <div className="search-bar">
+        <input
+          type="text"
+          placeholder="Search knowledge..."
+          value={search}
+          onChange={e => onSearchChange(e.target.value)}
+          className="search-input"
+        />
       </div>
-      <div className="intent-item-row2">
-        {signal && <span className={`intent-item-signal signal-${signal.type}`}>{signal.message}</span>}
-        <span className={`intent-item-phase ${intent.worstPhase.replace('_', '-')}`}>
-          {phaseLabel(intent.worstPhase)}
-        </span>
-        {hasChildren && (
-          <span className="intent-progress">
-            <span className="intent-progress-track">
-              <span className="intent-progress-fill" style={{ width: `${pct}%` }} />
-            </span>
-            <span className="intent-progress-label">{resolved}/{total}</span>
-          </span>
+      <div className="filter-section">
+        {projects.length > 1 && (
+          <div className="filter-row">
+            <button
+              className={`filter-pill ${projectFilter === null ? 'active' : ''}`}
+              onClick={() => onProjectFilter(null)}
+            >
+              all projects
+            </button>
+            {projects.map(proj => (
+              <button
+                key={proj}
+                className={`filter-pill ${projectFilter === proj ? 'active' : ''}`}
+                onClick={() => onProjectFilter(projectFilter === proj ? null : proj)}
+              >
+                {proj}
+              </button>
+            ))}
+          </div>
         )}
-        {!hasChildren && <span className="intent-not-decomposed">not decomposed</span>}
-        {intent.priority != null && <span className="intent-item-priority">P{intent.priority}</span>}
+        <div className="filter-row">
+          <button
+            className={`filter-pill ${categoryFilter === null ? 'active' : ''}`}
+            onClick={() => onCategoryFilter(null)}
+          >
+            all ({filtered.length})
+          </button>
+          {categories.map(cat => {
+            const count = filtered.filter(e => e.category === cat).length
+            if (count === 0) return null
+            return (
+              <button
+                key={cat}
+                className={`filter-pill ${categoryFilter === cat ? 'active' : ''}`}
+                onClick={() => onCategoryFilter(categoryFilter === cat ? null : cat)}
+                style={categoryFilter === cat ? { color: categoryColor(cat), borderColor: categoryColor(cat) } : {}}
+              >
+                {cat} ({count})
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div className="entry-items">
+        {filtered.map(entry => (
+          <button
+            key={entryId(entry)}
+            className={`entry-item ${selectedId === entryId(entry) ? 'selected' : ''}`}
+            onClick={() => onSelect(entry)}
+          >
+            <div className="entry-item-header">
+              <span className="entry-key">{entry.key}</span>
+              <span className="entry-age">{timeAgo(entry.updated_at)}</span>
+            </div>
+            <div className="entry-item-meta">
+              <CategoryBadge category={entry.category} />
+              {projects.length > 1 && <ProjectBadge project={entry.project} />}
+              <span className="entry-author">{entry.created_by}</span>
+              {entry.days_stale > 7 && (
+                <span className="stale-indicator">stale</span>
+              )}
+            </div>
+          </button>
+        ))}
+        {filtered.length === 0 && (
+          <div className="empty-state">
+            {entries.length === 0 ? 'No knowledge entries yet.' : 'No entries match your filters.'}
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
-async function artifactAction(
-  nodeId: string,
-  artifact_type: string,
-  artifact_id: string,
-  action: string,
-  value?: unknown,
-): Promise<boolean> {
-  try {
-    const res = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/artifact-response`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ artifact_type, artifact_id, action, value }),
-    })
-    return res.ok
-  } catch { return false }
-}
-
-function IntentDetailPanel({ intent, onMutate }: { intent: IntentSummary | null; onMutate: () => void }) {
-  const [deciding, setDeciding] = useState<{ nodeId: string; decisionId: string } | null>(null)
-  const [decisionAnswer, setDecisionAnswer] = useState('')
-  const [decisionRationale, setDecisionRationale] = useState('')
-  const [busy, setBusy] = useState<string | null>(null)
-
-  // Reset form state when selected intent changes
-  useEffect(() => {
-    setDeciding(null)
-    setDecisionAnswer('')
-    setDecisionRationale('')
-  }, [intent?.node.id])
-
-  if (!intent) {
-    return (
-      <aside className="panel">
-        <div className="panel-empty">Select an intent to see details</div>
-      </aside>
-    )
-  }
-
-  const { resolved, total } = intent.progress
-  const pct = total > 0 ? Math.round((resolved / total) * 100) : 0
-  const hasChildren = (intent.node.children || []).length > 0
-
-  const act = async (nodeId: string, type: string, id: string, action: string, value?: unknown) => {
-    setBusy(`${nodeId}:${type}:${id}:${action}`)
-    const ok = await artifactAction(nodeId, type, id, action, value)
-    setBusy(null)
-    if (ok) onMutate()
-  }
-
-  const isBusy = (nodeId: string, type: string, id: string, action: string) =>
-    busy === `${nodeId}:${type}:${id}:${action}`
-
-  const attentionCount = intent.openDecisions.length + intent.untestedAssumptions.length
-    + intent.unscopedEdgeCases.length + intent.unconfirmedDod.length
+function EntryDetail({
+  entry,
+  log,
+  logLoading,
+  showProject,
+}: {
+  entry: KnowledgeEntry
+  log: LogEntry[]
+  logLoading: boolean
+  showProject: boolean
+}) {
+  const [showHistory, setShowHistory] = useState(false)
 
   return (
-    <aside className="panel">
-      <div className="panel-title">{intent.node.summary}</div>
-
-      {/* Metadata */}
-      <div className="panel-section">
-        <div className="panel-meta">
-          <span className={`panel-phase-badge ${intent.worstPhase.replace('_', '-')}`}>
-            {phaseLabel(intent.worstPhase)}
-          </span>
-          <span className="panel-meta-item">{intent.project}</span>
-          {intent.priority != null && <span className="panel-meta-item">P{intent.priority}</span>}
-          <span className="panel-meta-item">updated {timeAgo(intent.updatedAt)}</span>
+    <div className="entry-detail">
+      <div className="detail-header">
+        <h2 className="detail-key">{entry.key}</h2>
+        <div className="detail-meta">
+          <CategoryBadge category={entry.category} />
+          {showProject && (
+            <>
+              <span className="meta-sep">·</span>
+              <ProjectBadge project={entry.project} />
+            </>
+          )}
+          <span className="meta-sep">·</span>
+          <span className="meta-text">{entry.created_by}</span>
+          <span className="meta-sep">·</span>
+          <span className="meta-text">{timeAgo(entry.updated_at)}</span>
+          {entry.days_stale > 7 && (
+            <>
+              <span className="meta-sep">·</span>
+              <span className="stale-indicator">{entry.days_stale}d stale</span>
+            </>
+          )}
         </div>
-      </div>
-
-      {/* Progress */}
-      <div className="panel-section">
-        <div className="panel-section-title">Progress</div>
-        {hasChildren ? (
-          <>
-            <div className="panel-progress">
-              <div className="panel-progress-bar">
-                <div className="panel-progress-fill" style={{ width: `${pct}%` }} />
-              </div>
-              <span className="panel-progress-text">{resolved} of {total} resolved</span>
-            </div>
-            <div className="phase-distribution">
-              {(Object.entries(intent.phaseCounts) as [DiscoveryPhase, number][])
-                .filter(([, count]) => count > 0)
-                .map(([phase, count]) => (
-                  <span key={phase} className={`phase-count ${phase.replace('_', '-')}`}>
-                    {phaseLabel(phase)}: {count}
-                  </span>
-                ))}
-            </div>
-          </>
-        ) : (
-          <div className="panel-progress-text">Not decomposed yet</div>
+        {entry.source_node && (
+          <div className="source-node">
+            <span className="source-label">source:</span>
+            <span className={`source-summary ${entry.source_node.resolved ? 'resolved' : ''}`}>
+              {entry.source_node.summary}
+            </span>
+          </div>
         )}
       </div>
 
-      {/* Open Decisions */}
-      {intent.openDecisions.length > 0 && (
-        <div className="panel-section">
-          <div className="panel-section-title">
-            Decisions ({intent.openDecisions.length})
-          </div>
-          {intent.openDecisions.map(d => {
-            const isDeciding = deciding?.nodeId === d.nodeId && deciding?.decisionId === d.id
-            return (
-              <div key={`${d.nodeId}:${d.id}`} className="artifact-row">
-                <div className="artifact-content">
-                  <span className="artifact-status open">?</span>
-                  <span className="artifact-text">{d.question}</span>
+      <div className="detail-content">
+        <pre className="content-text">{entry.content}</pre>
+      </div>
+
+      <div className="detail-history">
+        <button
+          className="history-toggle"
+          onClick={() => setShowHistory(!showHistory)}
+        >
+          {showHistory ? '▾' : '▸'} History {!logLoading && `(${log.length})`}
+        </button>
+        {showHistory && (
+          <div className="history-list">
+            {logLoading ? (
+              <div className="history-loading">Loading...</div>
+            ) : log.length === 0 ? (
+              <div className="history-empty">No history recorded.</div>
+            ) : (
+              log.map((entry, i) => (
+                <div key={i} className="history-item">
+                  <span className="history-action">{entry.action}</span>
+                  <span className="history-agent">{entry.agent}</span>
+                  <span className="history-time">{timeAgo(entry.timestamp)}</span>
                 </div>
-                <div className="attention-source">{d.nodeSummary}</div>
-                {!isDeciding && (
-                  <div className="artifact-actions">
-                    <button
-                      className="action-btn action-decide"
-                      disabled={busy !== null}
-                      onClick={() => { setDeciding({ nodeId: d.nodeId, decisionId: d.id }); setDecisionAnswer(''); setDecisionRationale('') }}
-                    >
-                      Answer
-                    </button>
-                  </div>
-                )}
-                {isDeciding && (
-                  <div className="decision-form">
-                    <input
-                      className="decision-input"
-                      type="text"
-                      placeholder="Your decision..."
-                      value={decisionAnswer}
-                      onChange={e => setDecisionAnswer(e.target.value)}
-                      autoFocus
-                    />
-                    <input
-                      className="decision-input decision-rationale-input"
-                      type="text"
-                      placeholder="Rationale (optional)"
-                      value={decisionRationale}
-                      onChange={e => setDecisionRationale(e.target.value)}
-                    />
-                    <div className="decision-form-actions">
-                      <button
-                        className="action-btn action-decide"
-                        disabled={busy !== null || !decisionAnswer.trim()}
-                        onClick={() => act(d.nodeId, 'decisions', d.id, 'decide', {
-                          answer: decisionAnswer.trim(),
-                          rationale: decisionRationale.trim() || undefined,
-                        })}
-                      >
-                        {isBusy(d.nodeId, 'decisions', d.id, 'decide') ? '...' : 'Decide'}
-                      </button>
-                      <button
-                        className="action-btn action-cancel"
-                        onClick={() => setDeciding(null)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {/* Untested Assumptions */}
-      {intent.untestedAssumptions.length > 0 && (
-        <div className="panel-section">
-          <div className="panel-section-title">
-            Assumptions ({intent.untestedAssumptions.length})
+              ))
+            )}
           </div>
-          {intent.untestedAssumptions.map(a => (
-            <div key={`${a.nodeId}:${a.id}`} className="artifact-row">
-              <div className="artifact-content">
-                <span className="artifact-status untested">○</span>
-                <span className="artifact-text">{a.text}</span>
-              </div>
-              <div className="attention-source">{a.nodeSummary}</div>
-              <div className="artifact-actions">
-                <button
-                  className="action-btn action-validate"
-                  disabled={busy !== null}
-                  onClick={() => act(a.nodeId, 'assumptions', a.id, 'validate')}
-                >
-                  {isBusy(a.nodeId, 'assumptions', a.id, 'validate') ? '...' : 'Validate'}
-                </button>
-                <button
-                  className="action-btn action-reject"
-                  disabled={busy !== null}
-                  onClick={() => act(a.nodeId, 'assumptions', a.id, 'reject')}
-                >
-                  {isBusy(a.nodeId, 'assumptions', a.id, 'reject') ? '...' : 'Reject'}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Unscoped Edge Cases */}
-      {intent.unscopedEdgeCases.length > 0 && (
-        <div className="panel-section">
-          <div className="panel-section-title">
-            Edge Cases ({intent.unscopedEdgeCases.length})
-          </div>
-          {intent.unscopedEdgeCases.map(e => (
-            <div key={`${e.nodeId}:${e.id}`} className="artifact-row">
-              <div className="artifact-content">
-                <span className="artifact-status scope-unscoped">?</span>
-                <span className="artifact-text">{e.case}</span>
-              </div>
-              <div className="attention-source">{e.nodeSummary}</div>
-              <div className="artifact-actions">
-                <button
-                  className="action-btn action-scope-in"
-                  disabled={busy !== null}
-                  onClick={() => act(e.nodeId, 'edge_cases', e.id, 'scope_in')}
-                >
-                  {isBusy(e.nodeId, 'edge_cases', e.id, 'scope_in') ? '...' : 'In scope'}
-                </button>
-                <button
-                  className="action-btn action-scope-out"
-                  disabled={busy !== null}
-                  onClick={() => act(e.nodeId, 'edge_cases', e.id, 'scope_out')}
-                >
-                  {isBusy(e.nodeId, 'edge_cases', e.id, 'scope_out') ? '...' : 'Out of scope'}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Unconfirmed Definition of Done */}
-      {intent.unconfirmedDod.length > 0 && (
-        <div className="panel-section">
-          <div className="panel-section-title">
-            Definition of Done ({intent.unconfirmedDod.length})
-          </div>
-          {intent.unconfirmedDod.map(d => (
-            <div key={`${d.nodeId}:${d.id}`} className="artifact-row">
-              <div className="artifact-content">
-                <span className="artifact-status untested">○</span>
-                <span className="artifact-text">{d.criterion}</span>
-              </div>
-              <div className="attention-source">{d.nodeSummary}</div>
-              <div className="artifact-actions">
-                <button
-                  className="action-btn action-validate"
-                  disabled={busy !== null}
-                  onClick={() => act(d.nodeId, 'definition_of_done', d.id, 'confirm')}
-                >
-                  {isBusy(d.nodeId, 'definition_of_done', d.id, 'confirm') ? '...' : 'Met'}
-                </button>
-                <button
-                  className="action-btn action-reject"
-                  disabled={busy !== null}
-                  onClick={() => act(d.nodeId, 'definition_of_done', d.id, 'reject')}
-                >
-                  {isBusy(d.nodeId, 'definition_of_done', d.id, 'reject') ? '...' : 'Not met'}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Blocked Nodes */}
-      {intent.blockedNodes.length > 0 && (
-        <div className="panel-section">
-          <div className="panel-section-title">Blocked ({intent.blockedNodes.length})</div>
-          {intent.blockedNodes.map(n => (
-            <div key={n.id} className="health-row">
-              <span className="health-dot red" />
-              <span className="health-label">{n.summary}</span>
-              {n.reason && <span className="health-reason">{n.reason}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Stale Nodes */}
-      {intent.staleNodes.length > 0 && (
-        <div className="panel-section">
-          <div className="panel-section-title">Stale ({intent.staleNodes.length})</div>
-          {intent.staleNodes.map(n => (
-            <div key={n.id} className="health-row">
-              <span className="health-dot orange" />
-              <span className="health-label">{n.summary}</span>
-              <span className="health-meta">{n.daysSince}d</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Summary when nothing needs attention */}
-      {attentionCount === 0 && intent.blockedNodes.length === 0 && intent.staleNodes.length === 0 && (
-        <div className="panel-section">
-          <div className="panel-section-title">Status</div>
-          <div className="panel-status-ok">All clear — no items need your attention</div>
-        </div>
-      )}
-    </aside>
+        )}
+      </div>
+    </div>
   )
 }
 
 // --- App ---
 
 export default function App() {
-  const [theme, setTheme] = useState<'dark' | 'light'>(getTheme)
-  const [projects, setProjects] = useState<ProjectSummary[]>([])
-  const [intents, setIntents] = useState<IntentSummary[]>([])
+  const [entries, setEntries] = useState<KnowledgeEntry[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
+  const [projectFilter, setProjectFilter] = useState<string | null>(null)
+  const [log, setLog] = useState<LogEntry[]>([])
+  const [logLoading, setLogLoading] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [dbPath, setDbPath] = useState<string | null>(null)
 
-  const toggleTheme = useCallback(() => {
-    const next = theme === 'dark' ? 'light' : 'dark'
-    setTheme(next)
-    localStorage.setItem('graph-ui-theme', next)
-    document.documentElement.setAttribute('data-theme', next)
-  }, [theme])
+  // Track change detection
+  const [changeFingerprint, setChangeFingerprint] = useState('')
 
-  // Set initial theme
+  // Load all knowledge + health info
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
-  }, [])
-
-  // Data loading — extracted for reuse on mutation refresh
-  const loadData = useCallback(async (isInitial = false) => {
-    try {
-      const projRes = await fetch('/api/projects')
-      const projectsData: ProjectSummary[] = await projRes.json()
-      setProjects(projectsData)
-
-      const treeResponses: TreeApiResponse[] = await Promise.all(
-        projectsData.map(p => fetch(`/api/projects/${p.project}/tree`).then(r => r.json()))
-      )
-
-      const allIntents: IntentSummary[] = []
-      for (const resp of treeResponses) {
-        const nodes = (resp.nodes || []).map(n => ({ ...n, project: resp.project }))
-        const trees = buildTree(nodes)
-
-        // Depth-1 nodes are direct children of project roots
-        for (const root of trees) {
-          for (const child of root.children || []) {
-            if (!child.resolved) {
-              allIntents.push(aggregateIntent(child, resp.project))
-            }
-          }
-        }
-      }
-
-      // Sort: worst phase urgency, then attention count, then staleness
-      allIntents.sort((a, b) => {
-        const phaseA = phaseOrder(a.worstPhase)
-        const phaseB = phaseOrder(b.worstPhase)
-        if (phaseA !== phaseB) return phaseA - phaseB
-
-        const attA = a.openDecisions.length + a.untestedAssumptions.length
-          + a.unscopedEdgeCases.length + a.unconfirmedDod.length
-        const attB = b.openDecisions.length + b.untestedAssumptions.length
-          + b.unscopedEdgeCases.length + b.unconfirmedDod.length
-        if (attB !== attA) return attB - attA
-
-        return b.staleNodes.length - a.staleNodes.length
+    Promise.all([
+      fetch('/api/knowledge').then(r => r.json()),
+      fetch('/api/health').then(r => r.json()),
+    ])
+      .then(([knowledgeData, healthData]: [KnowledgeEntry[], { db_path?: string }]) => {
+        setEntries(knowledgeData)
+        if (healthData.db_path) setDbPath(healthData.db_path)
+        setLoading(false)
       })
-
-      setIntents(allIntents)
-    } catch (err) {
-      console.error('Failed to load data:', err)
-    } finally {
-      if (isInitial) setLoading(false)
-    }
+      .catch(() => setLoading(false))
   }, [])
 
-  useEffect(() => { loadData(true) }, [loadData])
-
-  // Poll for changes — pauses when tab hidden or user inactive (60s)
-  useEffect(() => {
-    let lastKey = ''
-    let timer: ReturnType<typeof setInterval> | null = null
-    let lastActivity = Date.now()
-    const POLL_MS = 2000
-    const INACTIVE_MS = 60_000
-
-    const poll = async () => {
-      if (document.hidden) return
-      if (Date.now() - lastActivity > INACTIVE_MS) return
-      try {
-        const res = await fetch('/api/changes')
-        const { latest, count } = await res.json()
-        const key = `${latest}:${count}`
-        if (lastKey && key !== lastKey) {
-          loadData()
+  // Reload all knowledge
+  const loadKnowledge = useCallback(() => {
+    fetch('/api/knowledge')
+      .then(r => r.json())
+      .then((data: KnowledgeEntry[]) => {
+        setEntries(data)
+        // If selected entry no longer exists, deselect
+        if (selectedId && !data.some(e => entryId(e) === selectedId)) {
+          setSelectedId(null)
         }
-        lastKey = key
-      } catch { /* ignore network errors */ }
+      })
+      .catch(() => {})
+  }, [selectedId])
+
+  // Load log when selected entry changes
+  const selectedEntry = entries.find(e => entryId(e) === selectedId) ?? null
+
+  useEffect(() => {
+    if (!selectedEntry) {
+      setLog([])
+      return
+    }
+    setLogLoading(true)
+    fetch(`/api/projects/${encodeURIComponent(selectedEntry.project)}/knowledge/${encodeURIComponent(selectedEntry.key)}/log`)
+      .then(r => r.json())
+      .then((data: LogEntry[]) => {
+        setLog(data)
+        setLogLoading(false)
+      })
+      .catch(() => setLogLoading(false))
+  }, [selectedId])
+
+  // Polling for changes
+  useEffect(() => {
+    let active = true
+    let timeout: ReturnType<typeof setTimeout>
+
+    const poll = () => {
+      if (document.hidden) {
+        timeout = setTimeout(poll, 2000)
+        return
+      }
+      fetch('/api/changes')
+        .then(r => r.json())
+        .then(data => {
+          if (!active) return
+          const fp = `${data.latest}:${data.count}:${data.knowledge_count ?? 0}`
+          if (changeFingerprint && fp !== changeFingerprint) {
+            loadKnowledge()
+          }
+          setChangeFingerprint(fp)
+          timeout = setTimeout(poll, 2000)
+        })
+        .catch(() => {
+          if (active) timeout = setTimeout(poll, 5000)
+        })
     }
 
-    const resetActivity = () => {
-      const wasInactive = Date.now() - lastActivity > INACTIVE_MS
-      lastActivity = Date.now()
-      // If waking from inactivity, poll immediately to catch up
-      if (wasInactive) poll()
-    }
+    poll()
+    return () => { active = false; clearTimeout(timeout) }
+  }, [changeFingerprint, loadKnowledge])
 
-    const onVisibilityChange = () => {
-      // Poll immediately when tab becomes visible again
-      if (!document.hidden) poll()
-    }
-
-    timer = setInterval(poll, POLL_MS)
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    window.addEventListener('mousemove', resetActivity)
-    window.addEventListener('keydown', resetActivity)
-    window.addEventListener('click', resetActivity)
-
-    return () => {
-      if (timer) clearInterval(timer)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-      window.removeEventListener('mousemove', resetActivity)
-      window.removeEventListener('keydown', resetActivity)
-      window.removeEventListener('click', resetActivity)
-    }
-  }, [loadData])
-
-  const selectedIntent = intents.find(i => i.node.id === selectedId) || null
+  const projects = [...new Set(entries.map(e => e.project))]
 
   if (loading) {
-    return (
-      <div className="app">
-        <Header theme={theme} onToggleTheme={toggleTheme} projects={[]} />
-        <div className="main">
-          <div className="empty">
-            <div className="empty-text">Loading...</div>
-          </div>
-        </div>
-      </div>
-    )
+    return <div className="app-loading">Loading...</div>
   }
 
   return (
     <div className="app">
-      <Header theme={theme} onToggleTheme={toggleTheme} projects={projects} />
-      <div className="main">
-        <div className="intent-list">
-          {intents.length === 0 ? (
-            <div className="empty">
-              <div className="empty-text">No active intents</div>
-            </div>
-          ) : (
-            <>
-              <div className="intent-controls">
-                <span className="intent-count">{intents.length} intent{intents.length !== 1 ? 's' : ''}</span>
-              </div>
-              {intents.map(intent => (
-                <IntentRow
-                  key={intent.node.id}
-                  intent={intent}
-                  isSelected={intent.node.id === selectedId}
-                  onClick={() => setSelectedId(intent.node.id === selectedId ? null : intent.node.id)}
-                />
-              ))}
-            </>
+      <header className="app-header">
+        <div className="header-left">
+          <h1 className="header-title">Knowledge</h1>
+          <span className="entry-count">{entries.length} entries</span>
+          {dbPath && (
+            <span className="db-path" title={dbPath}>
+              {dbPath.split('/').pop()}
+            </span>
           )}
         </div>
-        <IntentDetailPanel intent={selectedIntent} onMutate={loadData} />
-      </div>
+        <div className="header-right">
+          <ThemeToggle />
+        </div>
+      </header>
+
+      <main className="app-main">
+        {entries.length === 0 && !loading ? (
+          <div className="empty-project">
+            <p>No knowledge entries yet.</p>
+            <p className="empty-hint">Knowledge entries are created by agents via graph_knowledge_write.</p>
+          </div>
+        ) : (
+          <>
+            <EntryList
+              entries={entries}
+              selectedId={selectedId}
+              onSelect={(entry) => setSelectedId(entryId(entry))}
+              search={search}
+              onSearchChange={setSearch}
+              categoryFilter={categoryFilter}
+              onCategoryFilter={setCategoryFilter}
+              projectFilter={projectFilter}
+              onProjectFilter={setProjectFilter}
+            />
+            <div className="detail-panel">
+              {selectedEntry ? (
+                <EntryDetail
+                  entry={selectedEntry}
+                  log={log}
+                  logLoading={logLoading}
+                  showProject={projects.length > 1}
+                />
+              ) : (
+                <div className="no-selection">
+                  Select an entry to view its content.
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </main>
     </div>
   )
 }

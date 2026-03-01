@@ -14,6 +14,7 @@ export interface ResolveInput {
   context_links?: string[];
   // [sl:g51sz-5sGTtq1AzTh-_io] Inline knowledge write — capture findings in same call
   knowledge?: { key: string; content: string };
+  decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
 }
 
 export interface ResolveResult {
@@ -105,7 +106,8 @@ export function handleResolve(input: ResolveInput, agent: string): ResolveResult
       resolved: true,
       add_evidence: evidence,
       add_context_links: contextLinks,
-    }]
+    }],
+    decision_context: input.decision_context,
   }, agent);
 
   // [sl:g51sz-5sGTtq1AzTh-_io] Inline knowledge write — source_node auto-set to resolved node

@@ -15,6 +15,7 @@ export interface PlanNodeInput {
 
 export interface PlanInput {
   nodes: PlanNodeInput[];
+  decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
 }
 
 export interface PlanResult {
@@ -110,6 +111,7 @@ export function handlePlan(input: PlanInput, agent: string): PlanResult {
         context_links: nodeInput.context_links,
         properties: nodeInput.properties,
         agent,
+        decision_context: input.decision_context,
       });
 
       refMap.set(nodeInput.ref, node.id);
@@ -142,6 +144,7 @@ export function handlePlan(input: PlanInput, agent: string): PlanResult {
           to: toId,
           type: "depends_on",
           agent,
+          decision_context: input.decision_context,
         });
 
         if (result.rejected) {

@@ -10,6 +10,7 @@ export interface ConnectEdgeInput {
 
 export interface ConnectInput {
   edges: ConnectEdgeInput[];
+  decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
 }
 
 export interface ConnectResult {
@@ -40,7 +41,7 @@ export function handleConnect(input: ConnectInput, agent: string): ConnectResult
     }
 
     if (edge.remove) {
-      const removed = removeEdge(edge.from, edge.to, edge.type, agent);
+      const removed = removeEdge(edge.from, edge.to, edge.type, agent, input.decision_context);
       if (removed) {
         applied++;
       } else {
@@ -56,6 +57,7 @@ export function handleConnect(input: ConnectInput, agent: string): ConnectResult
         to: edge.to,
         type: edge.type,
         agent,
+        decision_context: input.decision_context,
       });
 
       if (result.rejected) {

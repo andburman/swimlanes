@@ -18,8 +18,18 @@ export interface PlanInput {
   decision_context?: string; // [sl:M8jj8RzospuObjRJiDMRS]
 }
 
+// [sl:r4elbcG5MXyr2p1mgQoAI] Dedup warning
+export interface PotentialDuplicate {
+  new_ref: string;
+  new_summary: string;
+  existing_id: string;
+  existing_summary: string;
+  reason: string;
+}
+
 export interface PlanResult {
   created: Array<{ ref: string; id: string }>;
+  potential_duplicates?: PotentialDuplicate[]; // [sl:r4elbcG5MXyr2p1mgQoAI]
   quality_warning?: string; // [sl:Aqr3gbYg_XDgv2YOj8_qb]
 }
 
@@ -159,8 +169,69 @@ export function handlePlan(input: PlanInput, agent: string): PlanResult {
 
   transaction();
 
+  // [sl:r4elbcG5MXyr2p1mgQoAI] Dedup detection — warn on potential duplicate siblings
+  const stopWords = new Set(["the", "a", "an", "and", "or", "for", "to", "in", "on", "of", "is", "it", "as", "at", "by", "with", "from", "that", "this", "be", "are", "was", "were", "has", "have", "had", "do", "does", "did", "not", "no", "but", "if", "up", "out", "all", "add", "new", "set", "get", "use"]);
+  const extractTerms = (s: string): Set<string> => {
+    const words = s.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+    return new Set(words);
+  };
+
+  const duplicates: PotentialDuplicate[] = [];
+  const createdIds = new Set(created.map(c => c.id));
+
+  for (const c of created) {
+    const node = getNode(c.id);
+    if (!node?.parent) continue;
+
+    const newTerms = extractTerms(node.summary);
+    if (newTerms.size === 0) continue;
+
+    // Check unresolved siblings (same parent, not this node, not created in this batch)
+    const siblings = db.prepare(
+      "SELECT id, summary, properties FROM nodes WHERE parent = ? AND id != ? AND resolved = 0"
+    ).all(node.parent, node.id) as Array<{ id: string; summary: string; properties: string }>;
+
+    for (const sib of siblings) {
+      if (createdIds.has(sib.id)) continue; // skip nodes created in this same batch
+
+      const sibTerms = extractTerms(sib.summary);
+      const shared = [...newTerms].filter(t => sibTerms.has(t));
+
+      if (shared.length >= 3) {
+        duplicates.push({
+          new_ref: c.ref,
+          new_summary: node.summary,
+          existing_id: sib.id,
+          existing_summary: sib.summary,
+          reason: `${shared.length} shared terms: ${shared.slice(0, 5).join(", ")}`,
+        });
+        continue;
+      }
+
+      // Check identical non-internal properties
+      if (node.properties && Object.keys(node.properties).length > 0) {
+        const sibProps = JSON.parse(sib.properties);
+        const matchingProps = Object.entries(node.properties)
+          .filter(([k]) => !k.startsWith("_"))
+          .filter(([k, v]) => sibProps[k] === v);
+        if (matchingProps.length > 0 && matchingProps.length === Object.keys(node.properties).filter(k => !k.startsWith("_")).length) {
+          duplicates.push({
+            new_ref: c.ref,
+            new_summary: node.summary,
+            existing_id: sib.id,
+            existing_summary: sib.summary,
+            reason: `identical properties: ${matchingProps.map(([k, v]) => `${k}=${v}`).join(", ")}`,
+          });
+        }
+      }
+    }
+  }
+
   // [sl:Aqr3gbYg_XDgv2YOj8_qb] Quality KPI warning before adding new work
   const result: PlanResult = { created };
+  if (duplicates.length > 0) {
+    result.potential_duplicates = duplicates;
+  }
   if (created.length > 0) {
     const firstNode = getNode(created[0].id);
     if (firstNode) {

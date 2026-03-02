@@ -44,6 +44,7 @@ export interface KnowledgeAuditResult {
   healthy: string; // pipe-delimited: "key|category|Nd" per line
   summary: {
     total: number;
+    healthy: number; // [sl:2g13PcLtVSApmJk2_XL6c]
     flagged: number;
     stale_30d: number;
     missing_source: number;
@@ -52,55 +53,44 @@ export interface KnowledgeAuditResult {
   prompt: string;
 }
 
-/**
- * Compute similarity ratio between two strings (0-1).
- * Uses longest common substring ratio — cheap, no dependencies.
- */
-function similarity(a: string, b: string): number {
-  if (a === b) return 1;
-  const short = a.length <= b.length ? a : b;
-  const long = a.length <= b.length ? b : a;
+// [sl:j-sIf9idlYs26FzBNmE58] Content-based overlap detection — same category + >60% word overlap
+function extractContentWords(content: string): Set<string> {
+  const stopWords = new Set(["the", "a", "an", "and", "or", "for", "to", "in", "on", "of", "is", "it", "as", "at", "by", "with", "from", "that", "this", "be", "are", "was", "were", "has", "have", "had", "do", "does", "did", "not", "no", "but", "if", "up", "out", "all"]);
+  return new Set(
+    content.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/)
+      .filter(w => w.length > 2 && !stopWords.has(w))
+  );
+}
 
-  // If one is a prefix of the other, strong overlap signal
-  if (long.startsWith(short) && short.length >= 3) return 0.8;
-
-  // If one is a substring of the other, likely overlap
-  if (long.includes(short) && short.length >= 3) return 0.7;
-
-  // Longest common substring ratio
-  let maxLen = 0;
-  for (let i = 0; i < short.length; i++) {
-    for (let j = i + 1; j <= short.length; j++) {
-      const sub = short.slice(i, j);
-      if (long.includes(sub) && sub.length > maxLen) {
-        maxLen = sub.length;
-      }
-    }
-  }
-  return (2 * maxLen) / (a.length + b.length);
+function contentWordOverlap(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  const shared = [...a].filter(w => b.has(w)).length;
+  const minSize = Math.min(a.size, b.size);
+  return shared / minSize;
 }
 
 /**
- * Find keys that are suspiciously similar — potential duplicates or overlaps.
- * Uses normalized key comparison (strip common separators).
+ * Find entries with overlapping content — same category + >60% word overlap.
  */
-function findSimilarKeys(keys: string[]): Map<string, string[]> {
+function findOverlaps(entries: Array<{ key: string; content: string; category: string }>): Map<string, string[]> {
   const result = new Map<string, string[]>();
   const THRESHOLD = 0.6;
 
-  for (let i = 0; i < keys.length; i++) {
+  // Pre-compute word sets
+  const wordSets = entries.map(e => ({ key: e.key, category: e.category, words: extractContentWords(e.content) }));
+
+  for (let i = 0; i < wordSets.length; i++) {
     const similar: string[] = [];
-    for (let j = 0; j < keys.length; j++) {
+    for (let j = 0; j < wordSets.length; j++) {
       if (i === j) continue;
-      // Normalize: lowercase, strip separators
-      const a = keys[i].toLowerCase().replace(/[-_]/g, "");
-      const b = keys[j].toLowerCase().replace(/[-_]/g, "");
-      if (similarity(a, b) >= THRESHOLD) {
-        similar.push(keys[j]);
+      // Only compare within same category
+      if (wordSets[i].category !== wordSets[j].category) continue;
+      if (contentWordOverlap(wordSets[i].words, wordSets[j].words) >= THRESHOLD) {
+        similar.push(wordSets[j].key);
       }
     }
     if (similar.length > 0) {
-      result.set(keys[i], similar);
+      result.set(wordSets[i].key, similar);
     }
   }
   return result;
@@ -136,7 +126,7 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
       project,
       flagged: [],
       healthy: "",
-      summary: { total: 0, flagged: 0, stale_30d: 0, missing_source: 0, potential_overlaps: 0 },
+      summary: { total: 0, healthy: 0, flagged: 0, stale_30d: 0, missing_source: 0, potential_overlaps: 0 },
       prompt: "No knowledge entries to audit.",
     };
   }
@@ -159,9 +149,8 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
     }
   }
 
-  // Compute key similarity
-  const keys = rows.map(r => r.key);
-  const similarKeys = findSimilarKeys(keys);
+  // [sl:j-sIf9idlYs26FzBNmE58] Content-based overlap detection within same category
+  const overlaps = findOverlaps(rows.map(r => ({ key: r.key, content: r.content, category: r.category })));
 
   // Build and classify entries — flagged get full detail, healthy get pipe-delimited text
   const STALE_THRESHOLD = 30;
@@ -188,9 +177,10 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
       }
     }
 
-    const similar = similarKeys.get(r.key) ?? [];
+    const similar = overlaps.get(r.key) ?? [];
     const isStale = daysSinceUpdate >= STALE_THRESHOLD;
-    const isOrphaned = sourceStatus.status === "missing";
+    // [sl:wwVQzbT6SNP_e4rAmKnSm] Only flag orphaned when source_node is truly missing (deleted/absent), not when resolved
+    const isOrphaned = sourceStatus.status === "missing" && r.source_node !== null;
     const hasOverlap = similar.length > 0;
 
     if (isStale || isOrphaned || hasOverlap) {
@@ -216,10 +206,10 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
   }
 
   // Summary stats
-  const overlaps = new Set<string>();
-  for (const [key, similar] of similarKeys) {
-    overlaps.add(key);
-    for (const s of similar) overlaps.add(s);
+  const overlapKeys = new Set<string>();
+  for (const [key, similar] of overlaps) {
+    overlapKeys.add(key);
+    for (const s of similar) overlapKeys.add(s);
   }
 
   const total = rows.length;
@@ -235,7 +225,7 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
       "5. **Coverage gaps** — is there important knowledge that should exist but doesn't?",
       "",
       "For each issue found, use graph_knowledge_write to update/consolidate, or graph_knowledge_delete to remove stale entries.",
-      overlaps.size > 0 ? `\nPotential key overlaps detected: ${[...overlaps].join(", ")}. Check if these should be merged.` : "",
+      overlapKeys.size > 0 ? `\nPotential content overlaps detected: ${[...overlapKeys].join(", ")}. Check if these should be merged.` : "",
     ].filter(Boolean).join("\n");
 
   return {
@@ -244,10 +234,11 @@ export function handleKnowledgeAudit(input: KnowledgeAuditInput): KnowledgeAudit
     healthy: healthyLines.join("\n"),
     summary: {
       total,
+      healthy: healthyLines.length,
       flagged: flagged.length,
       stale_30d: flagged.filter(e => e.flags.includes("stale")).length,
       missing_source: flagged.filter(e => e.flags.includes("orphaned")).length,
-      potential_overlaps: overlaps.size,
+      potential_overlaps: overlapKeys.size,
     },
     prompt,
   };

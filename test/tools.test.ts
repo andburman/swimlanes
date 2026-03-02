@@ -107,6 +107,91 @@ describe("graph_plan", () => {
   });
 });
 
+// [sl:r4elbcG5MXyr2p1mgQoAI] Dedup warning tests
+describe("graph_plan dedup warnings", () => {
+  it("warns on similar summary with shared terms", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({
+      nodes: [{ ref: "a", parent_ref: root.id, summary: "Implement user authentication password reset flow" }]
+    }, AGENT);
+
+    const result = handlePlan({
+      nodes: [{ ref: "b", parent_ref: root.id, summary: "Build user authentication password recovery" }]
+    }, AGENT);
+
+    expect(result.potential_duplicates).toBeDefined();
+    expect(result.potential_duplicates!.length).toBe(1);
+    expect(result.potential_duplicates![0].new_ref).toBe("b");
+    expect(result.potential_duplicates![0].reason).toContain("shared terms");
+  });
+
+  it("warns on identical properties match", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({
+      nodes: [{ ref: "a", parent_ref: root.id, summary: "Fix H-2 severity issue", properties: { finding: "H-2" } }]
+    }, AGENT);
+
+    const result = handlePlan({
+      nodes: [{ ref: "b", parent_ref: root.id, summary: "Address audit finding", properties: { finding: "H-2" } }]
+    }, AGENT);
+
+    expect(result.potential_duplicates).toBeDefined();
+    expect(result.potential_duplicates!.some(d => d.reason.includes("finding=H-2"))).toBe(true);
+  });
+
+  it("does not warn on different parents", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [
+        { ref: "p1", parent_ref: root.id, summary: "Audit phase" },
+        { ref: "p2", parent_ref: root.id, summary: "Implementation phase" },
+        { ref: "a", parent_ref: "p1", summary: "Implement user authentication system" },
+      ]
+    }, AGENT);
+    const p2Id = plan.created.find(c => c.ref === "p2")!.id;
+    // Set discovery done so we can add children
+    handleUpdate({ updates: [{ node_id: p2Id, discovery: "done" }] }, AGENT);
+
+    // Same summary but under different parent — no warning
+    const result = handlePlan({
+      nodes: [{ ref: "b", parent_ref: p2Id, summary: "Implement user authentication system" }]
+    }, AGENT);
+
+    expect(result.potential_duplicates).toBeUndefined();
+  });
+
+  it("does not warn on resolved siblings", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    const plan = handlePlan({
+      nodes: [{ ref: "a", parent_ref: root.id, summary: "Implement user authentication password reset flow" }]
+    }, AGENT);
+    const aId = plan.created.find(c => c.ref === "a")!.id;
+    handleUpdate({ updates: [{ node_id: aId, resolved: true, resolved_reason: "Done" }] }, AGENT);
+
+    const result = handlePlan({
+      nodes: [{ ref: "b", parent_ref: root.id, summary: "Build user authentication password recovery" }]
+    }, AGENT);
+
+    // Resolved sibling should not trigger warning
+    expect(result.potential_duplicates).toBeUndefined();
+  });
+
+  it("never blocks — always creates the node", () => {
+    const { root } = openProject("test", "test", AGENT) as any;
+    handlePlan({
+      nodes: [{ ref: "a", parent_ref: root.id, summary: "Implement user authentication password reset flow" }]
+    }, AGENT);
+
+    const result = handlePlan({
+      nodes: [{ ref: "b", parent_ref: root.id, summary: "Build user authentication password recovery" }]
+    }, AGENT);
+
+    // Node should still be created despite duplicate warning
+    expect(result.created.length).toBe(1);
+    expect(result.created[0].ref).toBe("b");
+  });
+});
+
 describe("discovery enforcement", () => {
   it("graph_open sets discovery:pending on new project roots", () => {
     const { root } = handleOpen({ project: "disc", goal: "Test discovery" }, AGENT) as any;
@@ -2420,16 +2505,33 @@ describe("graph_knowledge_audit", () => {
   });
 
   it("flags entries with missing source nodes", () => {
-    handleOpen({ project: "audit-orphan", goal: "Orphan test" }, AGENT);
-    // Write knowledge with no claimed task — source_node will be null
+    const { root } = handleOpen({ project: "audit-orphan", goal: "Orphan test" }, AGENT) as any;
+    handleUpdate({ updates: [{ node_id: root.id, discovery: "done" }] }, AGENT);
+    const plan = handlePlan({
+      nodes: [{ ref: "task", parent_ref: root.id, summary: "Temp task" }],
+    }, AGENT);
+    const taskId = plan.created[0].id;
+    // Claim task so knowledge gets source_node
+    handleNext({ project: "audit-orphan", claim: true }, AGENT);
     handleKnowledgeWrite({ project: "audit-orphan", key: "stale", content: "Some old info" }, AGENT);
+    // Delete the source task — now source_node points to a missing node
+    handleRestructure({ operations: [{ op: "delete", node_id: taskId }] }, AGENT);
 
     const result = handleKnowledgeAudit({ project: "audit-orphan" }) as any;
     expect(result.flagged).toHaveLength(1);
     expect(result.flagged[0].source_node.status).toBe("missing");
     expect(result.flagged[0].flags).toContain("orphaned");
-    expect(result.flagged[0].content).toBe("Some old info"); // flagged entries include content
+    expect(result.flagged[0].content).toBe("Some old info");
     expect(result.summary.missing_source).toBe(1);
+  });
+
+  it("does not flag orphaned when source_node is null", () => {
+    handleOpen({ project: "audit-null-src", goal: "Null source test" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-null-src", key: "info", content: "Some knowledge" }, AGENT);
+
+    const result = handleKnowledgeAudit({ project: "audit-null-src" }) as any;
+    // null source_node is normal (no task was claimed), not orphaned
+    expect(result.flagged.filter((e: any) => e.flags.includes("orphaned"))).toHaveLength(0);
   });
 
   it("classifies entries with resolved source as healthy", () => {
@@ -2457,23 +2559,20 @@ describe("graph_knowledge_audit", () => {
     expect(result.healthy).toContain("decision|general|");
   });
 
-  it("flags entries with similar keys and includes content", () => {
+  it("flags entries with overlapping content in same category", () => {
     handleOpen({ project: "audit-overlap", goal: "Overlap test" }, AGENT);
-    handleKnowledgeWrite({ project: "audit-overlap", key: "auth", content: "JWT tokens" }, AGENT);
-    handleKnowledgeWrite({ project: "audit-overlap", key: "authentication", content: "OAuth flow" }, AGENT);
-    handleKnowledgeWrite({ project: "audit-overlap", key: "database", content: "Postgres" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-overlap", key: "auth-v1", content: "User authentication uses JWT tokens for session management with refresh token rotation and secure cookie storage", category: "architecture" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-overlap", key: "auth-v2", content: "User authentication uses JWT tokens for session management with OAuth2 integration and secure cookie storage", category: "architecture" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-overlap", key: "database", content: "Postgres with connection pooling" }, AGENT);
 
     const result = handleKnowledgeAudit({ project: "audit-overlap" }) as any;
 
-    // auth and authentication should be flagged with overlap + orphaned (no source)
-    expect(result.flagged.length).toBeGreaterThanOrEqual(2);
-    const authEntry = result.flagged.find((e: any) => e.key === "auth");
-    expect(authEntry.similar_keys).toContain("authentication");
+    // auth-v1 and auth-v2 should be flagged with overlap (same category, >60% content word overlap)
+    const authEntry = result.flagged.find((e: any) => e.key === "auth-v1");
+    expect(authEntry).toBeDefined();
+    expect(authEntry.similar_keys).toContain("auth-v2");
     expect(authEntry.flags).toContain("overlap");
-    expect(authEntry.content).toBe("JWT tokens"); // flagged entries include content
-
-    const authNEntry = result.flagged.find((e: any) => e.key === "authentication");
-    expect(authNEntry.similar_keys).toContain("auth");
+    expect(authEntry.content).toContain("JWT tokens"); // flagged entries include content
 
     expect(result.summary.potential_overlaps).toBeGreaterThan(0);
   });
@@ -2502,8 +2601,9 @@ describe("graph_knowledge_audit", () => {
 
   it("includes analysis prompt with overlap info when flagged", () => {
     handleOpen({ project: "audit-prompt", goal: "Prompt test" }, AGENT);
-    handleKnowledgeWrite({ project: "audit-prompt", key: "api", content: "REST" }, AGENT);
-    handleKnowledgeWrite({ project: "audit-prompt", key: "api-v2", content: "GraphQL" }, AGENT);
+    // Create entries with content overlap to trigger flagging
+    handleKnowledgeWrite({ project: "audit-prompt", key: "api-design", content: "REST API uses JSON responses with pagination tokens and rate limiting headers for all endpoints", category: "architecture" }, AGENT);
+    handleKnowledgeWrite({ project: "audit-prompt", key: "api-contracts", content: "REST API uses JSON responses with pagination tokens and versioned endpoints for backward compatibility", category: "architecture" }, AGENT);
 
     const result = handleKnowledgeAudit({ project: "audit-prompt" }) as any;
     expect(result.flagged.length).toBeGreaterThan(0);

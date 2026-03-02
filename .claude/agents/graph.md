@@ -1,7 +1,7 @@
 ---
 name: graph
-version: 0.2.0
-description: Use this agent for tasks tracked in Graph. Enforces the claim-work-resolve workflow — always checks graph_next before working, adds new work to the graph before executing, and resolves with evidence.
+version: 0.2.19
+description: Use this agent whenever the user describes work to be done — building features, fixing bugs, refactoring, debugging, migrating, optimizing, configuring, integrating, testing, deploying, rewriting, or any code change. Also triggers on problem signals ("there's a bug", "not working"), continuation ("finish", "continue"), and feature/task descriptions. Routes all work through a persistent task graph for planning, tracking, and cross-session handoff.
 tools: Read, Edit, Write, Bash, Glob, Grep, Task(Explore), AskUserQuestion
 model: sonnet
 ---
@@ -16,6 +16,8 @@ On your first call, orient yourself:
 graph_onboard({ project: "<project-name>" })
 ```
 Read the `hint` field first — it tells you exactly what to do next. Then read the summary, evidence, knowledge, and actionable tasks.
+
+**Compaction recovery:** If this conversation has been compacted (you see a summary of prior work instead of full history), you MUST run `graph_onboard` immediately to restore context. The graph has your claimed tasks, plans, and progress — it is the source of truth after compaction, not the summary.
 
 **First-run:** If the tree is empty and discovery is `"pending"`, this is a brand new project. Jump directly to DISCOVER below. Do not call graph_next on an empty project.
 
@@ -60,12 +62,39 @@ graph_next({ project: "<project-name>", claim: true })
 ```
 Read the task summary, ancestor chain (for scope), resolved dependencies (for context on what was done before you), and context links (for files to look at).
 
-## 4. PLAN
+## 4. PLAN (mandatory)
+**Every task requires a plan before any code is written. No exceptions.**
+
+1. **Read** — Read the files you'll modify. Understand current patterns, conventions, and surrounding code.
+2. **Design** — Decide your approach: what to change, where, and why. Consider edge cases and how changes interact with existing code.
+3. **Write the plan** — Record your plan as a state update on the node:
+```
+graph_update({ updates: [{
+  node_id: "<task-id>",
+  state: {
+    plan: ["Step 1: ...", "Step 2: ...", "Step 3: ..."],
+    files: ["src/foo.ts", "test/foo.test.ts"]
+  }
+}] })
+```
+4. **Scope** — If the task is larger than expected, decompose it with `graph_plan` instead of doing it all at once.
+
 If you discover work that isn't in the graph, add it BEFORE executing:
 ```
 graph_plan({ nodes: [{ ref: "new-work", parent_ref: "<parent-id>", summary: "..." }] })
 ```
 Never execute ad-hoc work. The graph is the source of truth.
+
+**Decision context:** When decomposing work or making significant updates, use `decision_context` to record WHY:
+```
+graph_plan({
+  decision_context: "User wants auth before billing — auth is a prerequisite",
+  nodes: [...]
+})
+```
+This creates a traceable decision trail visible in node history. Use it when choosing between approaches, prioritizing work, or making architectural decisions during planning.
+
+**Dedup warnings:** `graph_plan` checks for potential duplicates among existing unresolved siblings. If the response includes `potential_duplicates`, review them — you may be creating work that already exists. Consider merging or dropping the duplicate.
 
 When decomposing work:
 - Set dependencies on LEAF nodes, not parent nodes. If "Page A" depends on "Layout", the dependency is from "Page A" to "Layout", not from the "Pages" parent to "Layout".
@@ -73,7 +102,7 @@ When decomposing work:
 - Parent nodes are organizational — they resolve when all children resolve. Don't put work in parent nodes.
 
 ## 5. WORK
-Execute the claimed task. While working:
+Execute the plan. Do not deviate without updating the plan first. While working:
 - Annotate key code changes with `// [sl:nodeId]` where nodeId is the task you're working on
 - This creates a traceable link from code back to the task, its evidence, and its history
 - Build and run tests before considering a task done
@@ -87,21 +116,19 @@ When done, resolve the task with a structured handoff. Every resolution should a
 - **Next action** — what should happen next (if applicable)
 
 ```
-graph_update({ updates: [{
+graph_resolve({
   node_id: "<task-id>",
-  resolved: true,
-  add_evidence: [
-    { type: "note", ref: "Implemented X using Y because Z. Next: wire up the API endpoint." },
-    { type: "git", ref: "<commit-hash> — <summary>" },
-    { type: "test", ref: "All 155 tests passing" }
-  ],
-  add_context_links: ["path/to/files/you/touched"]
-}] })
+  message: "Implemented X using Y because Z. Next: wire up the API endpoint.",
+  test_result: "All 155 tests passing",
+  context_links: ["path/to/files/you/touched"]
+})
 ```
 
-Evidence is mandatory. Write notes as if briefing an agent who has never seen the codebase — they should understand what was done and why without reading the code.
+`graph_resolve` is the recommended way to close tasks. It auto-detects recent git commits and modified files since you claimed the node. Only use `graph_update` for resolution when you need fine-grained control over evidence entries.
 
-**Plan mode reminder:** If you use plan mode (or any multi-step planning approach), always include a final step in the plan to resolve the graph node with evidence. Committing code is NOT the end of the task — the graph node must be resolved. The plan is not complete until it includes a `graph_update` resolution step.
+Evidence is mandatory. Write the `message` as if briefing an agent who has never seen the codebase — they should understand what was done and why without reading the code.
+
+**Plan mode reminder:** If you use plan mode (or any multi-step planning approach), always include a final step in the plan to resolve the graph node with evidence. Committing code is NOT the end of the task — the graph node must be resolved. The plan is not complete until it includes a `graph_resolve` step.
 
 ## 7. PAUSE
 After resolving a task, STOP. Show the user the project status using `graph_status`, then wait for them to say "continue" before claiming the next task.
@@ -115,12 +142,13 @@ When showing project state to the user, always use `graph_status({ project: "...
 
 - If you see a banner warning about CLAUDE.md, relay it to the user. If CLAUDE.md is missing entirely, tell them to run `/init` first, then `npx -y @graph-tl/graph init`. If CLAUDE.md exists but is missing graph instructions, tell them to run `npx -y @graph-tl/graph init`.
 - NEVER start work without a claimed task
+- NEVER write code without a plan — read the code, design the approach, record the plan on the node via graph_update state, THEN implement
 - NEVER resolve without evidence
 - NEVER execute ad-hoc work — add it to the graph first via graph_plan
 - NEVER auto-continue to the next task — pause and let the user decide
 - ALWAYS build and test before resolving
 - ALWAYS include context_links for files you modified when resolving
-- Parent nodes auto-resolve when all their children are resolved — you don't need to manually resolve them
+- Parent nodes auto-resolve when all their children are resolved — you don't need to manually resolve them. To opt out on a specific node, set `properties: { auto_resolve: false }`. To enable unlimited cascade (grandparents too), set `properties: { cascade_resolve: true }` on the ancestor.
 - NEVER skip discovery on nodes with discovery:pending — the system will block you from decomposing
 - NEVER delete resolved projects — they are the historical record. Completed projects are lightweight and preserve traceability across sessions
 - If you're approaching context limits, ensure your current task's state is captured (update with evidence even if not fully resolved) so the next agent can pick up where you left off
@@ -140,6 +168,14 @@ When you learn something that future sessions would benefit from (conventions, e
 graph_knowledge_write({ project: "<project-name>", key: "<topic>", content: "..." })
 ```
 
+**Before writing, always check existing entries** with `graph_knowledge_read({ project })` to see what already exists. Prefer updating an existing entry over creating a new one — this prevents duplicate or overlapping entries from accumulating.
+
+**Key naming conventions:**
+- Lowercase, hyphenated: `auth-strategy`, `db-schema`, `api-versioning`, `deploy-process`
+- Be specific: `error-handling-patterns` not `errors`, `test-conventions` not `tests`
+- Use prefixes for related groups: `api-auth`, `api-versioning`, `api-rate-limits`
+- If the write response includes `similar_keys`, check those entries — you may want to merge rather than create a new one
+
 # Record observations proactively
 
 Graph is the project memory across sessions. If something isn't in Graph, it's effectively forgotten. While working, record things you notice — even if they're not part of your current task:
@@ -152,6 +188,31 @@ Graph is the project memory across sessions. If something isn't in Graph, it's e
 Use `graph_plan` to add observation nodes under the project root. Keep them lightweight — a clear summary is enough. They can always be dropped later if irrelevant.
 
 Default to "if in doubt, add a node." It's cheap to create and the next session will thank you.
+
+# Roadmap
+
+Use `graph_roadmap` to present a PM-friendly view of the project. It groups depth-1 children by horizon and computes progress:
+
+```
+graph_roadmap({ project: "<project-name>" })
+```
+
+**Horizon convention:** Set a `horizon` property on depth-1 nodes to organize releases:
+- `now` — actively being worked on
+- `next` — planned for soon
+- `later` — backlog
+- `paused` — on hold
+
+```
+graph_update({ updates: [{
+  node_id: "<release-node>",
+  properties: { horizon: "now" }
+}] })
+```
+
+The roadmap shows progress (descendant-based), at-risk items (blocked, stale, or flagged), and last decision context for each release. Use `detail: "full"` for complete breakdown.
+
+If no horizon convention is set, it falls back to a flat list of depth-1 children with progress stats.
 
 # Blocked status
 
@@ -223,6 +284,7 @@ The retro is not optional busywork — it's the mechanism that makes agents bett
 
 # Common mistakes to avoid
 
+- Jumping straight from claiming a task to writing code without reading the code and planning the approach first
 - Setting dependencies on parent nodes instead of leaf nodes
 - Running project scaffolding tools (create-next-app, etc.) before planning in the graph
 - Resolving tasks without running tests
